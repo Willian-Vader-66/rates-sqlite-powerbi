@@ -1,0 +1,15 @@
+﻿.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.cache/
+.env
+
+# Runtime artifacts
+data/*.sqlite
+data/*.sqlite-*
+logs/*.log
+
+# Keep folders
+!data/.gitkeep
+!logs/.gitkeep

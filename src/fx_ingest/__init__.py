@@ -1,8 +1,5 @@
-﻿"""FX ingest package."""
+﻿"""Compatibility layer for legacy imports."""
 
-__all__ = [
-    "cli",
-    "api",
-    "db",
-    "config",
-]
+from fx_rates import main
+
+__all__ = ["main"]

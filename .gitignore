@@ -2,14 +2,19 @@
 __pycache__/
 *.pyc
 .pytest_cache/
-.cache/
 .env
 
 # Runtime artifacts
+cache/*.json
 data/*.sqlite
 data/*.sqlite-*
 logs/*.log
 
 # Keep folders
+!cache/.gitkeep
 !data/.gitkeep
 !logs/.gitkeep
+
+# IDE
+.vscode/
+.idea/

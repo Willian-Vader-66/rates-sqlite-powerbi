@@ -1,1 +1,4 @@
-﻿from fx_rates.__main__ import *  # noqa: F401,F403
+﻿from fx_rates.cli import main
+
+if __name__ == "__main__":
+    raise SystemExit(main())

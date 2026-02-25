@@ -1,11 +1,6 @@
-﻿# FX Rates Ingest (SQLite + Power BI)
+﻿# fx-rates-sqlite-powerbi
 
-Pipeline simples para coletar cambio da API Frankfurter, normalizar dados e gravar em SQLite com rastreabilidade de execucao (`ingest_runs`).
-
-## Requisitos
-
-- Windows + PowerShell
-- Python 3.10+
+Projeto de portfolio para ingestao de taxas de cambio via API Frankfurter, com validacao estrita, persistencia idempotente em SQLite (upsert), logs operacionais, cache local e consumo no Power BI.
 
 ## Setup (Windows PowerShell)
 
@@ -14,65 +9,80 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 copy .env.example .env
+$env:PYTHONPATH = "src"
 ```
 
-## Rodar backfill (ultimos 90 dias)
+## Comandos CLI
 
-Exemplo usando o intervalo sugerido:
+Novo padrao:
 
 ```powershell
-python -m fx_ingest backfill --start 2025-11-01 --end 2026-02-10 --base USD --symbols BRL,EUR
+python -m fx_rates backfill --start 2025-01-01 --end 2025-12-31 --base USD --symbols BRL,EUR
+python -m fx_rates daily --base USD --symbols BRL,EUR
+python -m fx_rates status
 ```
 
-## Rodar carga diaria
+Compatibilidade temporaria (1 ciclo):
 
 ```powershell
+python -m fx_ingest backfill --start 2025-01-01 --end 2025-12-31 --base USD --symbols BRL,EUR
 python -m fx_ingest daily --base USD --symbols BRL,EUR
 ```
 
-## Verificar se o SQLite tem linhas
+Flags comuns:
+
+- `--db-path`
+- `--cache-dir`
+- `--no-cache`
+- `--log-level` (`DEBUG|INFO|WARNING|ERROR|CRITICAL`)
+- `--timeout`
+
+## Validar dados no SQLite
 
 ```powershell
 python -c "import sqlite3; c=sqlite3.connect('data/fx.sqlite'); print(c.execute('select count(*) from fx_rates').fetchone()[0]); c.close()"
 ```
 
-## Teste rapido
+## Testes
 
 ```powershell
-$env:PYTHONPATH='src'
-python -m unittest discover -s tests -v
+$env:PYTHONPATH = "src"
+pytest -q
 ```
 
-## Estrutura de tabelas
+## Power BI via ODBC
 
-- `fx_rates(date, base, symbol, rate, source, fetched_at, created_at, updated_at)`
-  - PK composta: `(date, base, symbol)`
-  - Upsert com `ON CONFLICT ... DO UPDATE`
-- `ingest_runs(id, command, args, status, started_at, finished_at, rows_inserted, error_message)`
-
-## Power BI (ODBC + SQLite)
-
-1. Instale um driver ODBC de SQLite no Windows.
+1. Instale um driver ODBC SQLite no Windows.
 2. Crie um DSN apontando para `data/fx.sqlite`.
 3. No Power BI Desktop: `Home -> Get Data -> ODBC`.
-4. Escolha o DSN e carregue a tabela `fx_rates`.
+4. Selecione o DSN e carregue a tabela `fx_rates`.
 
-Visuais recomendados:
+Dashboard minimo:
 
 - Line chart: `date` (X), `rate` (Y), legenda por `symbol`
 - Slicer por `symbol`
-- Card para ultima taxa
+- Card de ultima taxa
+
+Arquivo de evidencia:
+
+- `assets/powerbi_screenshot.png` (substitua o placeholder por screenshot real do dashboard)
+
+## Logs, cache e rastreabilidade
+
+- Log em arquivo: `logs/app.log`
+- Cache local: `cache/<hash>.json`
+- `ingest_runs` registra: inicio/fim, modo, parametros, row_count, status, erro
 
 ## Agendamento diario (Task Scheduler)
 
-Acao sugerida:
+Use o script:
 
 ```powershell
-cd C:\Projetos_Local\rates-sqlite-powerbi
-.\.venv\Scripts\python.exe -m fx_ingest daily --base USD --symbols BRL,EUR
+powershell -ExecutionPolicy Bypass -File .\scripts\run_daily.ps1 -Base USD -Symbols BRL,EUR
 ```
 
-## Logs
+## Troubleshooting
 
-- Arquivo: `logs/app.log`
-- Nivel padrao: `INFO`
+- Timeout/HTTP: aumente `--timeout` e verifique conectividade.
+- Payload invalido: execucao fail-fast, run marcado como `FAIL` em `ingest_runs`.
+- ODBC/DSN: confirme que o DSN aponta para `data/fx.sqlite` e que a tabela `fx_rates` existe.

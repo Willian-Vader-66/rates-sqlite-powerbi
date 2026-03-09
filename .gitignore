@@ -1,15 +1,18 @@
-﻿.venv/
+.venv/
 __pycache__/
 *.pyc
 .pytest_cache/
+.mypy_cache/
 .cache/
 .env
 
 # Runtime artifacts
 data/*.sqlite
 data/*.sqlite-*
+cache/*.json
 logs/*.log
 
-# Keep folders
+# Keep tracked folders
 !data/.gitkeep
+!cache/.gitkeep
 !logs/.gitkeep

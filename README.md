@@ -1,78 +1,143 @@
-﻿# FX Rates Ingest (SQLite + Power BI)
+# FX Rates Ingestion: Frankfurter API -> SQLite -> Power BI
 
-Pipeline simples para coletar cambio da API Frankfurter, normalizar dados e gravar em SQLite com rastreabilidade de execucao (`ingest_runs`).
+This project fetches foreign exchange rates from the public Frankfurter API, normalizes the payload into a tabular dataset, persists the history in SQLite with idempotent UPSERTs, and prepares the data for Power BI through ODBC.
 
-## Requisitos
+## What This Project Delivers
 
-- Windows + PowerShell
-- Python 3.10+
+- Daily FX rate ingestion with no API key.
+- Historical backfill over a date range.
+- Validation and normalization for latest and time-series payloads.
+- SQLite persistence with run tracking in `ingest_runs`.
+- Local cache for raw API responses in `cache/`.
+- Structured logs in `logs/app.log`.
+- Power BI connection instructions for Windows.
 
-## Setup (Windows PowerShell)
+## Requirements
+
+- Windows PowerShell
+- Python 3.11+
+- Internet access to `https://api.frankfurter.dev`
+
+## Windows Setup
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+.\.venv\Scripts\activate
 pip install -r requirements.txt
-copy .env.example .env
+Copy-Item .env.example .env
 ```
 
-## Rodar backfill (ultimos 90 dias)
+## Commands
 
-Exemplo usando o intervalo sugerido:
+Backfill:
 
 ```powershell
-python -m fx_ingest backfill --start 2025-11-01 --end 2026-02-10 --base USD --symbols BRL,EUR
+python -m fx_rates backfill --start 2025-11-01 --end 2026-02-10 --base USD --symbols BRL,EUR
 ```
 
-## Rodar carga diaria
+Daily update:
 
 ```powershell
-python -m fx_ingest daily --base USD --symbols BRL,EUR
+python -m fx_rates daily --base USD --symbols BRL,EUR
 ```
 
-## Verificar se o SQLite tem linhas
+Status:
 
 ```powershell
-python -c "import sqlite3; c=sqlite3.connect('data/fx.sqlite'); print(c.execute('select count(*) from fx_rates').fetchone()[0]); c.close()"
+python -m fx_rates status --last 10
 ```
 
-## Teste rapido
+PowerShell helpers:
 
 ```powershell
-$env:PYTHONPATH='src'
-python -m unittest discover -s tests -v
+.\scripts\run_backfill.ps1
+.\scripts\run_daily.ps1
 ```
 
-## Estrutura de tabelas
+## Runtime Defaults
 
-- `fx_rates(date, base, symbol, rate, source, fetched_at, created_at, updated_at)`
-  - PK composta: `(date, base, symbol)`
-  - Upsert com `ON CONFLICT ... DO UPDATE`
-- `ingest_runs(id, command, args, status, started_at, finished_at, rows_inserted, error_message)`
+- Database: `data/fx.sqlite`
+- Cache directory: `cache/`
+- Logs: `logs/app.log`
+- Timeout: `20` seconds
 
-## Power BI (ODBC + SQLite)
+Global CLI options available on every command:
 
-1. Instale um driver ODBC de SQLite no Windows.
-2. Crie um DSN apontando para `data/fx.sqlite`.
-3. No Power BI Desktop: `Home -> Get Data -> ODBC`.
-4. Escolha o DSN e carregue a tabela `fx_rates`.
+- `--db-path`
+- `--cache-dir`
+- `--no-cache`
+- `--log-level`
+- `--timeout`
 
-Visuais recomendados:
+## Quick SQLite Inspection
 
-- Line chart: `date` (X), `rate` (Y), legenda por `symbol`
-- Slicer por `symbol`
-- Card para ultima taxa
-
-## Agendamento diario (Task Scheduler)
-
-Acao sugerida:
+Open the database with a GUI tool or run a quick query from PowerShell:
 
 ```powershell
-cd C:\Projetos_Local\rates-sqlite-powerbi
-.\.venv\Scripts\python.exe -m fx_ingest daily --base USD --symbols BRL,EUR
+python -c "import sqlite3; conn = sqlite3.connect('data/fx.sqlite'); [print(row) for row in conn.execute(\"SELECT date, base, symbol, rate FROM fx_rates ORDER BY date DESC, symbol LIMIT 10;\")]; conn.close()"
 ```
 
-## Logs
+Example SQL for recent rates:
 
-- Arquivo: `logs/app.log`
-- Nivel padrao: `INFO`
+```sql
+SELECT date, base, symbol, rate
+FROM fx_rates
+ORDER BY date DESC, symbol
+LIMIT 20;
+```
+
+## Power BI via ODBC
+
+1. Install a SQLite ODBC driver on Windows.
+2. Create a System DSN or User DSN pointing to `data/fx.sqlite`.
+3. Open Power BI Desktop.
+4. Go to `Get Data -> ODBC`.
+5. Select the SQLite DSN.
+6. Load the `fx_rates` table.
+
+Suggested visuals:
+
+- Line chart with `date` on X, `rate` on Y, legend by `symbol`
+- Slicer by `symbol`
+- Card showing the latest available rate
+
+The placeholder screenshot file lives at `assets/powerbi_screenshot_placeholder.png`.
+
+## Logs and Cache
+
+- Raw API payload cache files are stored in `cache/` and keyed by a stable hash of URL plus query parameters.
+- Structured application logs go to the console and `logs/app.log`.
+- Every ingest run is tracked in SQLite through `ingest_runs`.
+
+## Validation and Local Checks
+
+Run the automated tests:
+
+```powershell
+python -m pytest
+```
+
+Run a small real backfill:
+
+```powershell
+python -m fx_rates backfill --start 2026-03-02 --end 2026-03-09 --base USD --symbols BRL,EUR
+```
+
+Inspect recent ingest runs:
+
+```powershell
+python -m fx_rates status --last 10
+```
+
+## Troubleshooting
+
+- `python` not found:
+  Install Python 3.11+ and ensure `python` is available in the terminal PATH.
+- `pytest` not found:
+  Activate the virtual environment and run `pip install -r requirements.txt`.
+- HTTP or timeout failures:
+  Retry with a larger `--timeout` value and confirm access to `api.frankfurter.dev`.
+- Unexpected cached responses:
+  Re-run the command with `--no-cache`.
+- Empty Power BI result:
+  Confirm the DSN points to `data/fx.sqlite` and verify rows exist in `fx_rates`.

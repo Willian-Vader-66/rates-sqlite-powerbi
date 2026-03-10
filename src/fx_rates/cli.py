@@ -17,7 +17,10 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--log-level", default=None, help="Logging level (INFO, DEBUG, ...).")
     common.add_argument("--timeout", default=None, type=int, help="HTTP timeout in seconds.")
 
-    parser = argparse.ArgumentParser(description="FX rates ingestion pipeline for SQLite and Power BI.")
+    parser = argparse.ArgumentParser(
+        prog="fx_rates",
+        description="FX rates ingestion pipeline for SQLite and Power BI.",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     backfill = subparsers.add_parser("backfill", parents=[common], help="Fetch a historical range.")
@@ -51,7 +54,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit:
+        raise
     settings = _settings_from_args(args)
     configure_logging(settings.log_file, settings.log_level)
     return int(args.func(args, settings))
@@ -71,7 +77,7 @@ def _settings_from_args(args: argparse.Namespace) -> Settings:
 
 def _run_backfill_command(args: argparse.Namespace, settings: Settings) -> int:
     if args.start > args.end:
-        raise SystemExit("--start must be less than or equal to --end.")
+        raise SystemExit("Invalid date range: --start must be less than or equal to --end.")
     return run_backfill(
         settings=settings,
         start=args.start,
@@ -93,7 +99,7 @@ def _run_daily_command(args: argparse.Namespace, settings: Settings) -> int:
 
 def _run_status_command(args: argparse.Namespace, settings: Settings) -> int:
     if args.last < 1:
-        raise SystemExit("--last must be greater than zero.")
+        raise SystemExit("Invalid value: --last must be greater than zero.")
     rows = run_status(settings=settings, last=args.last)
     if not rows:
         print("No ingest runs found.")

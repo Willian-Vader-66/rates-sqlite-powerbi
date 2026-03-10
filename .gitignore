@@ -3,8 +3,12 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
 .cache/
 .env
+build/
+dist/
+*.egg-info/
 
 # Runtime artifacts
 data/*.sqlite

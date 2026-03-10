@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fx-rates-sqlite-powerbi"
+version = "0.1.0"
+description = "FX rates ingestion from Frankfurter API into SQLite with Power BI-ready data."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [
+  { name = "Willian-Vader-66" }
+]
+dependencies = [
+  "requests>=2.32.0",
+  "python-dotenv>=1.0.1",
+]
+
+[project.scripts]
+fx-rates = "fx_rates.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,6 +1,8 @@
 import logging
 
-from fx_rates.api_frankfurter import normalize_payload
+import pytest
+
+from fx_rates.api_frankfurter import FrankfurterPayloadError, normalize_payload
 
 
 def test_normalize_latest_and_skip_invalid_rate(caplog):
@@ -40,3 +42,26 @@ def test_normalize_timeseries_payload():
     assert len(rows) == 4
     assert rows[0].fetched_at == "2026-03-09T12:00:00+00:00"
     assert rows[-1].symbol == "EUR"
+
+
+def test_normalize_latest_rejects_invalid_date():
+    payload = {
+        "amount": 1.0,
+        "base": "USD",
+        "date": "09-03-2026",
+        "rates": {"BRL": 5.23},
+    }
+
+    with pytest.raises(FrankfurterPayloadError, match="invalid date"):
+        normalize_payload(payload)
+
+
+def test_normalize_timeseries_rejects_invalid_date_key():
+    payload = {
+        "amount": 1.0,
+        "base": "USD",
+        "rates": {"03-09-2026": {"BRL": 5.23}},
+    }
+
+    with pytest.raises(FrankfurterPayloadError, match="invalid rates date key"):
+        normalize_payload(payload)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 from datetime import UTC, datetime
@@ -11,14 +12,17 @@ def utc_now_iso() -> str:
 
 
 def parse_date(value: str) -> str:
-    datetime.strptime(value, "%Y-%m-%d")
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"Invalid date '{value}'. Use YYYY-MM-DD.") from exc
     return value
 
 
 def parse_symbols(raw: str) -> list[str]:
     symbols = [item.strip().upper() for item in raw.split(",") if item.strip()]
     if not symbols:
-        raise ValueError("At least one symbol is required.")
+        raise argparse.ArgumentTypeError("At least one symbol is required.")
     return symbols
 
 

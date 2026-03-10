@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,22 @@ from .utils import stable_hash, utc_now_iso
 
 class FrankfurterClientError(RuntimeError):
     """Raised when the Frankfurter API cannot be read safely."""
+
+
+class FrankfurterCacheError(FrankfurterClientError):
+    """Raised when a cached response cannot be parsed or validated."""
+
+
+class FrankfurterHttpError(FrankfurterClientError):
+    """Raised when the HTTP request fails."""
+
+
+class FrankfurterJsonError(FrankfurterClientError):
+    """Raised when the API response cannot be decoded as JSON."""
+
+
+class FrankfurterPayloadError(FrankfurterClientError):
+    """Raised when the payload shape or semantic content is invalid."""
 
 
 class FrankfurterClient:
@@ -46,7 +63,7 @@ class FrankfurterClient:
             try:
                 cached_payload = json.loads(cache_path.read_text(encoding="utf-8"))
             except json.JSONDecodeError as exc:
-                raise FrankfurterClientError(f"Cached JSON is invalid: {cache_path}") from exc
+                raise FrankfurterCacheError(f"Cached JSON is invalid: {cache_path}") from exc
             validate_payload_shape(cached_payload)
             return cached_payload
 
@@ -55,12 +72,12 @@ class FrankfurterClient:
             response = requests.get(url, params=params, timeout=self.timeout)
             response.raise_for_status()
         except requests.RequestException as exc:
-            raise FrankfurterClientError(f"HTTP request failed: {exc}") from exc
+            raise FrankfurterHttpError(f"HTTP request failed: {exc}") from exc
 
         try:
             payload = response.json()
         except ValueError as exc:
-            raise FrankfurterClientError("API response is not valid JSON.") from exc
+            raise FrankfurterJsonError("API response is not valid JSON.") from exc
 
         validate_payload_shape(payload)
 
@@ -72,19 +89,26 @@ class FrankfurterClient:
 
 def validate_payload_shape(payload: dict[str, Any]) -> str:
     if not isinstance(payload, dict):
-        raise FrankfurterClientError("API payload must be a JSON object.")
+        raise FrankfurterPayloadError("API payload must be a JSON object.")
+
+    base = payload.get("base")
+    if not isinstance(base, str) or not base.strip():
+        raise FrankfurterPayloadError("API payload is missing the base currency.")
 
     rates = payload.get("rates")
     if not isinstance(rates, dict) or not rates:
-        raise FrankfurterClientError("API payload is missing a non-empty rates object.")
+        raise FrankfurterPayloadError("API payload is missing a non-empty rates object.")
 
     if isinstance(payload.get("date"), str):
+        _validate_iso_date(payload["date"], field_name="date")
         return "latest"
 
     if all(isinstance(key, str) and isinstance(value, dict) for key, value in rates.items()):
+        for date_key in rates:
+            _validate_iso_date(date_key, field_name="rates date key")
         return "timeseries"
 
-    raise FrankfurterClientError("API payload is neither a latest payload nor a time-series payload.")
+    raise FrankfurterPayloadError("API payload is neither a latest payload nor a time-series payload.")
 
 
 def normalize_payload(
@@ -94,9 +118,7 @@ def normalize_payload(
     logger: logging.Logger | None = None,
 ) -> list[FxRateRow]:
     mode = validate_payload_shape(payload)
-    base = str(payload.get("base", "")).upper()
-    if not base:
-        raise FrankfurterClientError("API payload is missing the base currency.")
+    base = str(payload["base"]).upper()
 
     normalized: list[FxRateRow] = []
     seen_logger = logger or logging.getLogger("fx_rates.normalize")
@@ -123,7 +145,7 @@ def normalize_payload(
 
     for row_date, by_symbol in payload["rates"].items():
         if not isinstance(by_symbol, dict):
-            raise FrankfurterClientError(f"Invalid time-series rates payload for date {row_date}.")
+            raise FrankfurterPayloadError(f"Invalid time-series rates payload for date {row_date}.")
         for symbol, rate in by_symbol.items():
             numeric_rate = _safe_rate(rate, str(row_date), str(symbol), seen_logger)
             if numeric_rate is None:
@@ -156,3 +178,10 @@ def _safe_rate(
     except (TypeError, ValueError):
         logger.warning("Skipping invalid rate for %s on %s: %r", symbol, date_value, rate)
         return None
+
+
+def _validate_iso_date(value: str, field_name: str) -> None:
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError as exc:
+        raise FrankfurterPayloadError(f"API payload has invalid {field_name}: {value}") from exc

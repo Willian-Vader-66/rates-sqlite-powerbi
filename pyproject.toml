@@ -1,4 +1,4 @@
-﻿[build-system]
+[build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "fx-rates-sqlite-powerbi"
 version = "0.1.0"
 description = "FX rates ingestion pipeline to SQLite for Power BI"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

@@ -1,11 +1,12 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from .models import FxRateRow
-from .utils import utc_now_iso
+from .utils import normalize_base, normalize_symbol_list, utc_now_iso
 
 FX_RATES_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS fx_rates (
@@ -18,8 +19,10 @@ CREATE TABLE IF NOT EXISTS fx_rates (
     PRIMARY KEY (date, base, symbol)
 );
 
-CREATE INDEX IF NOT EXISTS idx_fx_rates_symbol_date ON fx_rates(symbol, date);
-CREATE INDEX IF NOT EXISTS idx_fx_rates_date ON fx_rates(date);
+DROP INDEX IF EXISTS idx_fx_rates_symbol_date;
+DROP INDEX IF EXISTS idx_fx_rates_date;
+CREATE INDEX IF NOT EXISTS idx_fx_symbol_date ON fx_rates(symbol, date);
+CREATE INDEX IF NOT EXISTS idx_fx_date ON fx_rates(date);
 """
 
 INGEST_RUNS_TABLE_SQL = """
@@ -36,6 +39,39 @@ CREATE TABLE IF NOT EXISTS ingest_runs (
     status TEXT NOT NULL,
     error TEXT
 );
+"""
+
+FX_VIEWS_SQL = """
+DROP VIEW IF EXISTS v_fx_daily;
+CREATE VIEW v_fx_daily AS
+SELECT date, base, symbol, rate, source, fetched_at
+FROM fx_rates;
+
+DROP VIEW IF EXISTS v_fx_latest;
+CREATE VIEW v_fx_latest AS
+SELECT f.date, f.base, f.symbol, f.rate, f.source, f.fetched_at
+FROM fx_rates AS f
+INNER JOIN (
+    SELECT base, symbol, MAX(date) AS latest_date
+    FROM fx_rates
+    GROUP BY base, symbol
+) AS latest
+    ON f.base = latest.base
+   AND f.symbol = latest.symbol
+   AND f.date = latest.latest_date;
+
+DROP VIEW IF EXISTS v_fx_monthly_avg;
+CREATE VIEW v_fx_monthly_avg AS
+SELECT
+    substr(date, 1, 7) AS year_month,
+    base,
+    symbol,
+    AVG(rate) AS avg_rate,
+    COUNT(*) AS day_count,
+    MIN(date) AS first_date,
+    MAX(date) AS last_date
+FROM fx_rates
+GROUP BY substr(date, 1, 7), base, symbol;
 """
 
 UPSERT_SQL = """
@@ -68,6 +104,7 @@ def initialize_schema(db_path: str) -> None:
         _migrate_legacy_ingest_runs(conn)
         conn.executescript(FX_RATES_TABLE_SQL)
         conn.executescript(INGEST_RUNS_TABLE_SQL)
+        conn.executescript(FX_VIEWS_SQL)
         conn.commit()
 
 
@@ -115,13 +152,16 @@ def start_ingest_run(
     start: str | None,
     end: str | None,
 ) -> int:
+    normalized_base = normalize_base(base)
+    normalized_symbols = normalize_symbol_list(symbols)
+
     with sqlite3.connect(db_path) as conn:
         cursor = conn.execute(
             """
             INSERT INTO ingest_runs (started_at, mode, base, symbols, start, "end", status)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (utc_now_iso(), mode, base.upper(), ",".join(symbols), start, end, "RUNNING"),
+            (utc_now_iso(), mode, normalized_base, ",".join(normalized_symbols), start, end, "RUNNING"),
         )
         conn.commit()
         return int(cursor.lastrowid)
@@ -146,15 +186,17 @@ def finish_ingest_run(
         conn.commit()
 
 
-def latest_ingest_run(db_path: str) -> dict[str, str | int | None] | None:
+def list_ingest_runs(db_path: str, limit: int) -> list[dict[str, Any]]:
+    safe_limit = max(1, int(limit))
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
-        row = conn.execute(
+        rows = conn.execute(
             """
             SELECT run_id, started_at, finished_at, mode, base, symbols, start, "end", row_count, status, error
             FROM ingest_runs
             ORDER BY run_id DESC
-            LIMIT 1
-            """
-        ).fetchone()
-    return dict(row) if row else None
+            LIMIT ?
+            """,
+            (safe_limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]

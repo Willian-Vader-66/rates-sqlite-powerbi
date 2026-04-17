@@ -1,4 +1,11 @@
-﻿.venv/
+.venv/
+.release-venv/
+.uv-cache/
+.uv-cache-release/
+.uv-python-release/
+.uv-python-release2/
+.release-temp/
+.pytest-release-temp/
 __pycache__/
 *.pyc
 .pytest_cache/

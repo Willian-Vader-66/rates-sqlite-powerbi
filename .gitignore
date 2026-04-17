@@ -10,16 +10,21 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .env
+build/
+dist/
+*.egg-info/
 
 # Runtime artifacts
 cache/*.json
 data/*.sqlite
 data/*.sqlite-*
+cache/*.json
 logs/*.log
 
 # Keep folders
 !cache/.gitkeep
 !data/.gitkeep
+!cache/.gitkeep
 !logs/.gitkeep
 
 # IDE

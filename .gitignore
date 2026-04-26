@@ -1,4 +1,5 @@
 .venv/
+pkgtest/
 .release-venv/
 .uv-cache/
 .uv-cache-release/

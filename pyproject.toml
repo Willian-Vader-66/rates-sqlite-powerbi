@@ -7,6 +7,10 @@ name = "fx-rates-sqlite-powerbi"
 version = "0.1.0"
 description = "FX rates ingestion pipeline to SQLite for Power BI"
 requires-python = ">=3.11"
+dependencies = [
+    "requests",
+    "python-dotenv",
+]
 
 [tool.setuptools]
 package-dir = {"" = "src"}

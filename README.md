@@ -174,21 +174,65 @@ Quick check:
 python -c "import sqlite3; conn = sqlite3.connect('data/fx.sqlite'); print(conn.execute('select count(*) from fx_rates').fetchone()[0]); conn.close()"
 ```
 
-## Power BI Connection Note
+## Power BI / ODBC setup on Windows
 
-1. Install an SQLite ODBC driver on Windows.
-2. Create a DSN that points to `data/fx.sqlite`.
-3. In Power BI Desktop, go to `Home -> Get Data -> ODBC`.
-4. Select the DSN and load one or more of:
-   - `v_fx_daily`
-   - `v_fx_latest`
-   - `v_fx_monthly_avg`
+1. Make sure the SQLite database exists by running a backfill or daily load:
 
-Suggested use:
+```powershell
+python -m fx_rates backfill --start 2026-02-01 --end 2026-02-03 --base USD --symbols BRL,EUR
+```
+
+2. Create or refresh the USER DSN:
+
+```powershell
+.\scripts\setup_sqlite_odbc_dsn.ps1
+```
+
+If the execution policy blocks the script, run it explicitly with Windows PowerShell:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_sqlite_odbc_dsn.ps1
+```
+
+3. Test the DSN:
+
+```powershell
+.\scripts\test_sqlite_odbc_dsn.ps1
+```
+
+If the execution policy blocks the script, run it explicitly with Windows PowerShell:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\test_sqlite_odbc_dsn.ps1
+```
+
+4. In Power BI Desktop, use `Home -> Get Data -> ODBC`, select `FX_SQLITE`, choose `fx_rates`, then select `Transform Data`.
+
+Warning: do not select files from the SQLite ODBC driver installation folder such as `adddsn.exe`, `addsysdsn.exe`, `sqlite.exe`, or `sqlite3.exe`. The database file is the project file: `data\fx.sqlite`.
+
+Suggested analytics views:
 
 - `v_fx_daily` for daily line charts
 - `v_fx_latest` for current-rate cards
 - `v_fx_monthly_avg` for month-over-month summaries
+
+### ODBC troubleshooting
+
+- If no SQLite ODBC driver is detected, install the 64-bit SQLite ODBC driver and rerun `.\scripts\setup_sqlite_odbc_dsn.ps1`.
+- If Power BI Desktop is 64-bit, the SQLite ODBC driver must also be 64-bit.
+- If `.\scripts\test_sqlite_odbc_dsn.ps1` fails with "Cannot add type" or "assemblies are missing", run the test explicitly with Windows PowerShell:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\test_sqlite_odbc_dsn.ps1
+```
+
+- If `data\fx.sqlite` does not exist, run the project smoke command first:
+
+```powershell
+python -m fx_rates backfill --start 2026-02-01 --end 2026-02-03 --base USD --symbols BRL,EUR
+```
+
+- If the DSN already exists and points to the wrong file, rerun `.\scripts\setup_sqlite_odbc_dsn.ps1`.
 
 ## Verified Demo Run
 

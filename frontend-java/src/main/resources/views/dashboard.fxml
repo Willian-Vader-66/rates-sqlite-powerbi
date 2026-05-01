@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?import javafx.scene.layout.BorderPane?>
+
+<!-- The dashboard is currently built in Java code by DashboardController.
+     This placeholder keeps the resource structure ready for a future FXML split. -->
+<BorderPane xmlns:fx="http://javafx.com/fxml"/>

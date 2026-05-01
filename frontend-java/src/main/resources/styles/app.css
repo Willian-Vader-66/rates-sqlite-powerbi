@@ -1,0 +1,308 @@
+.root {
+    -fx-font-family: "Segoe UI", "Inter", Arial, sans-serif;
+    -fx-background-color: #060915;
+    -fx-text-fill: #e6f7ff;
+}
+
+.app-header {
+    -fx-background-color: linear-gradient(to right, #07111f, #10162d 52%, #1a1231);
+    -fx-border-color: transparent transparent #18d8ff transparent;
+    -fx-border-width: 0 0 1 0;
+    -fx-padding: 18 24 16 24;
+    -fx-spacing: 5;
+    -fx-effect: dropshadow(gaussian, rgba(24, 216, 255, 0.28), 18, 0.18, 0, 2);
+}
+
+.app-title {
+    -fx-text-fill: #f8fdff;
+    -fx-font-size: 24px;
+    -fx-font-weight: 800;
+}
+
+.app-subtitle {
+    -fx-text-fill: #7dd3fc;
+    -fx-font-size: 12px;
+    -fx-font-weight: 600;
+}
+
+.status-text {
+    -fx-text-fill: #b8c7d9;
+    -fx-font-size: 12px;
+}
+
+.content {
+    -fx-padding: 18;
+    -fx-spacing: 14;
+    -fx-background-color: radial-gradient(center 20% 10%, radius 80%, #101a33, #060915);
+}
+
+.metric-row {
+    -fx-spacing: 12;
+}
+
+.metric-card,
+.cyber-card,
+.panel,
+.detail-panel,
+.chart-panel {
+    -fx-background-color: rgba(8, 16, 33, 0.94);
+    -fx-border-color: rgba(24, 216, 255, 0.38);
+    -fx-border-radius: 10;
+    -fx-background-radius: 10;
+    -fx-padding: 14;
+    -fx-effect: dropshadow(gaussian, rgba(0, 229, 255, 0.16), 14, 0.18, 0, 0);
+}
+
+.metric-card {
+    -fx-min-width: 150;
+}
+
+.metric-title,
+.metric-label {
+    -fx-text-fill: #8fb3c9;
+    -fx-font-size: 12px;
+    -fx-font-weight: 600;
+}
+
+.metric-value {
+    -fx-text-fill: #70ffdf;
+    -fx-font-size: 24px;
+    -fx-font-weight: 800;
+}
+
+.panel-title {
+    -fx-text-fill: #e6f7ff;
+    -fx-font-size: 16px;
+    -fx-font-weight: 800;
+}
+
+.filter-bar {
+    -fx-background-color: rgba(10, 20, 42, 0.86);
+    -fx-border-color: rgba(128, 90, 213, 0.34);
+    -fx-border-radius: 10;
+    -fx-background-radius: 10;
+    -fx-padding: 10;
+    -fx-spacing: 10;
+    -fx-alignment: center-left;
+}
+
+.filter-bar .label {
+    -fx-text-fill: #9fb7ce;
+    -fx-font-weight: 600;
+}
+
+.text-field,
+.combo-box-base {
+    -fx-background-color: #07111f;
+    -fx-border-color: rgba(24, 216, 255, 0.38);
+    -fx-border-radius: 8;
+    -fx-background-radius: 8;
+    -fx-text-fill: #e6f7ff;
+    -fx-prompt-text-fill: #60768a;
+}
+
+.combo-box-base .list-cell {
+    -fx-text-fill: #e6f7ff;
+    -fx-background-color: transparent;
+}
+
+.check-box {
+    -fx-text-fill: #d9f4ff;
+}
+
+.neon-button,
+.neon-button-secondary,
+.filter-chip {
+    -fx-cursor: hand;
+    -fx-background-radius: 999;
+    -fx-border-radius: 999;
+    -fx-font-weight: 700;
+    -fx-padding: 7 13 7 13;
+}
+
+.neon-button {
+    -fx-background-color: linear-gradient(to right, #00e5ff, #7c3aed);
+    -fx-text-fill: #03111d;
+    -fx-border-color: transparent;
+    -fx-effect: dropshadow(gaussian, rgba(0, 229, 255, 0.36), 12, 0.18, 0, 0);
+}
+
+.neon-button-secondary {
+    -fx-background-color: rgba(13, 25, 51, 0.94);
+    -fx-text-fill: #90f7ff;
+    -fx-border-color: rgba(0, 229, 255, 0.48);
+}
+
+.filter-chip {
+    -fx-background-color: rgba(13, 25, 51, 0.92);
+    -fx-text-fill: #9fb7ce;
+    -fx-border-color: rgba(125, 211, 252, 0.28);
+}
+
+.filter-chip-active {
+    -fx-background-color: rgba(0, 229, 255, 0.20);
+    -fx-text-fill: #70ffdf;
+    -fx-border-color: #00e5ff;
+    -fx-effect: dropshadow(gaussian, rgba(0, 229, 255, 0.22), 10, 0.12, 0, 0);
+}
+
+.table-view {
+    -fx-background-color: rgba(8, 16, 33, 0.98);
+    -fx-border-color: rgba(24, 216, 255, 0.38);
+    -fx-border-radius: 10;
+    -fx-background-radius: 10;
+    -fx-table-cell-border-color: rgba(125, 211, 252, 0.10);
+}
+
+.table-view .column-header-background,
+.table-view .column-header {
+    -fx-background-color: #0d1a33;
+}
+
+.table-view .column-header .label {
+    -fx-text-fill: #7dd3fc;
+    -fx-font-weight: 800;
+}
+
+.table-row-cell {
+    -fx-background-color: #081021;
+    -fx-text-background-color: #d9f4ff;
+}
+
+.table-row-cell:odd {
+    -fx-background-color: #0a1429;
+}
+
+.table-row-cell:selected {
+    -fx-background-color: rgba(0, 229, 255, 0.22);
+    -fx-text-background-color: #ffffff;
+}
+
+.chart {
+    -fx-background-color: transparent;
+}
+
+.chart-plot-background {
+    -fx-background-color: #07111f;
+}
+
+.chart-series-line {
+    -fx-stroke: #00e5ff;
+    -fx-stroke-width: 2.2px;
+}
+
+.chart-line-symbol {
+    -fx-background-color: #70ffdf, #07111f;
+}
+
+.axis {
+    -fx-tick-label-fill: #9fb7ce;
+}
+
+.axis-label {
+    -fx-text-fill: #7dd3fc;
+}
+
+.error-banner,
+.danger-banner {
+    -fx-background-color: rgba(69, 10, 10, 0.92);
+    -fx-border-color: #fb7185;
+    -fx-border-radius: 10;
+    -fx-background-radius: 10;
+    -fx-text-fill: #ffe4e6;
+    -fx-padding: 10 12 10 12;
+}
+
+.error-banner .label {
+    -fx-text-fill: #ffe4e6;
+}
+
+.loading-overlay {
+    -fx-background-color: rgba(3, 7, 18, 0.58);
+}
+
+.loading-label {
+    -fx-background-color: #07111f;
+    -fx-border-color: #00e5ff;
+    -fx-border-radius: 10;
+    -fx-background-radius: 10;
+    -fx-padding: 12 18 12 18;
+    -fx-text-fill: #70ffdf;
+    -fx-font-weight: 800;
+}
+
+.connected,
+.status-connected {
+    -fx-text-fill: #70ffdf;
+}
+
+.disconnected,
+.status-offline {
+    -fx-text-fill: #fb7185;
+}
+
+.status-refreshing {
+    -fx-text-fill: #7dd3fc;
+}
+
+.muted {
+    -fx-text-fill: #7f95aa;
+}
+
+.positive {
+    -fx-text-fill: #70ffdf;
+}
+
+.negative {
+    -fx-text-fill: #fb7185;
+}
+
+.split-pane {
+    -fx-background-color: transparent;
+}
+
+.split-pane-divider {
+    -fx-background-color: rgba(24, 216, 255, 0.18);
+    -fx-padding: 0 1 0 1;
+}
+
+.splash-root {
+    -fx-background-color: radial-gradient(center 50% 45%, radius 70%, #14213f, #030712);
+}
+
+.splash-logo {
+    -fx-text-fill: #e6f7ff;
+    -fx-font-size: 40px;
+    -fx-font-weight: 900;
+    -fx-effect: dropshadow(gaussian, rgba(112, 255, 223, 0.65), 18, 0.22, 0, 0);
+}
+
+.splash-title {
+    -fx-text-fill: #ffffff;
+    -fx-font-size: 30px;
+    -fx-font-weight: 900;
+}
+
+.splash-subtitle {
+    -fx-text-fill: #7dd3fc;
+    -fx-font-size: 14px;
+    -fx-font-weight: 700;
+}
+
+.splash-ring {
+    -fx-stroke: #00e5ff;
+    -fx-stroke-width: 2.4;
+    -fx-effect: dropshadow(gaussian, rgba(0, 229, 255, 0.55), 18, 0.22, 0, 0);
+}
+
+.splash-hex {
+    -fx-fill: rgba(124, 58, 237, 0.14);
+    -fx-stroke: #70ffdf;
+    -fx-stroke-width: 2;
+}
+
+.splash-scan {
+    -fx-fill: #ff4fd8;
+    -fx-opacity: 0.76;
+    -fx-effect: dropshadow(gaussian, rgba(255, 79, 216, 0.58), 12, 0.22, 0, 0);
+}

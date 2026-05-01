@@ -22,6 +22,11 @@ class Settings:
     max_retries: int
     use_cache: bool
     use_cache_latest: bool
+    twelve_data_api_key: str
+    market_data_provider: str
+    market_data_demo_mode: bool
+    api_host: str
+    api_port: int
 
 
 DEFAULTS = Settings(
@@ -34,6 +39,11 @@ DEFAULTS = Settings(
     max_retries=3,
     use_cache=True,
     use_cache_latest=False,
+    twelve_data_api_key="",
+    market_data_provider="twelvedata",
+    market_data_demo_mode=False,
+    api_host="127.0.0.1",
+    api_port=8000,
 )
 
 
@@ -46,6 +56,8 @@ def load_settings(args: object | None = None) -> Settings:
     timeout_arg = getattr(args, "timeout", None)
     retries_arg = getattr(args, "retries", None)
     use_cache_latest_arg = getattr(args, "use_cache_latest", None)
+    api_host_arg = getattr(args, "host", None)
+    api_port_arg = getattr(args, "port", None)
 
     api_base_url = os.getenv("API_BASE_URL", DEFAULTS.api_base_url).rstrip("/")
     db_path = db_path_arg or os.getenv("DB_PATH", DEFAULTS.db_path)
@@ -71,6 +83,9 @@ def load_settings(args: object | None = None) -> Settings:
             name="USE_CACHE_LATEST",
         )
 
+    api_port_raw = api_port_arg if api_port_arg is not None else os.getenv("API_PORT", str(DEFAULTS.api_port))
+    api_port = int(api_port_raw)
+
     settings = Settings(
         api_base_url=api_base_url,
         db_path=db_path,
@@ -81,6 +96,14 @@ def load_settings(args: object | None = None) -> Settings:
         max_retries=max_retries,
         use_cache=not no_cache_arg,
         use_cache_latest=use_cache_latest and not no_cache_arg,
+        twelve_data_api_key=os.getenv("TWELVE_DATA_API_KEY", DEFAULTS.twelve_data_api_key),
+        market_data_provider=os.getenv("MARKET_DATA_PROVIDER", DEFAULTS.market_data_provider).strip().lower(),
+        market_data_demo_mode=parse_bool(
+            os.getenv("MARKET_DATA_DEMO_MODE", str(DEFAULTS.market_data_demo_mode)),
+            name="MARKET_DATA_DEMO_MODE",
+        ),
+        api_host=api_host_arg or os.getenv("API_HOST", DEFAULTS.api_host),
+        api_port=api_port,
     )
     validate_settings(settings)
     return settings
@@ -95,6 +118,10 @@ def validate_settings(settings: Settings) -> None:
         raise ValueError("CACHE_DIR nao pode ser vazio")
     if not settings.log_file:
         raise ValueError("LOG_FILE nao pode ser vazio")
+    if settings.market_data_provider not in {"twelvedata", "mock"}:
+        raise ValueError("MARKET_DATA_PROVIDER invalido: use twelvedata ou mock")
+    if settings.api_port <= 0 or settings.api_port > 65535:
+        raise ValueError("API_PORT invalida")
 
 
 def ensure_runtime_dirs(settings: Settings) -> None:

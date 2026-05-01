@@ -1,18 +1,40 @@
 # fx-rates-sqlite-powerbi
 
-FX rates ingestion project that fetches public exchange rates from the Frankfurter API, normalizes them into a tabular dataset, stores history in SQLite with idempotent UPSERT behavior, and prepares the data for Power BI via ODBC.
+Local financial market data backend that fetches public exchange rates from the Frankfurter API, stores FX and stock history in SQLite with idempotent UPSERT behavior, runs lightweight analysis over stored data, and exposes a local HTTP API for future front-ends.
 
 ## What This Project Is
 
-This repository provides a small but production-minded local pipeline for foreign exchange history:
+This repository started as a small but production-minded local pipeline for foreign exchange history and now includes a broader market-data backend:
 
 - `backfill` downloads a date range
 - `daily` fetches the latest available business day
+- `stocks backfill` and `stocks daily` ingest daily stock history from an editable watchlist
+- `quotes poll` refreshes latest quotes through safe polling for selected symbols
+- `analyze now` creates stock and FX analysis snapshots from data already stored in SQLite
+- `serve` exposes a local HTTP API for Java or other front-ends
 - backfill/time-series responses are cached on disk
 - daily/latest fetches fresh data by default
 - normalized rows are persisted into SQLite
 - each ingestion run is tracked in `ingest_runs`
 - logs are written to console and `logs/app.log`
+
+This is not a professional trading platform. Quote collection is near-real-time polling, not a tick-by-tick feed, and provider rate limits should be respected.
+
+## Architecture
+
+```text
+Frankfurter API -> FX ingest CLI -----------+
+                                            |
+Twelve Data API -> stock/quote providers -> Python backend -> SQLite
+Mock provider  -> demo/test data -----------+        |
+                                                     v
+                                           FastAPI local HTTP API
+                                                     |
+                                                     v
+                                      future Java front-end / dashboards
+```
+
+The Java front-end must consume the Python HTTP API. It should not read SQLite directly. The API contract lives in `docs/API_CONTRACT.md`.
 
 Default runtime paths:
 
@@ -65,9 +87,24 @@ LOG_FILE=logs/app.log
 LOG_LEVEL=INFO
 TIMEOUT_SECONDS=20
 MAX_RETRIES=3
+TWELVE_DATA_API_KEY=
+MARKET_DATA_PROVIDER=twelvedata
+MARKET_DATA_DEMO_MODE=false
+API_HOST=127.0.0.1
+API_PORT=8000
 ```
 
 CLI flags override `.env` values for the same setting.
+
+For stock data, create a Twelve Data API key and set `TWELVE_DATA_API_KEY`. For local demos, tests, and UI work without a key, set:
+
+```dotenv
+MARKET_DATA_DEMO_MODE=true
+```
+
+Demo mode uses deterministic realistic-looking data from `MockMarketDataProvider`.
+
+Dependency note: `httpx` is listed with the main requirements because FastAPI's `TestClient` needs it and this project does not yet split runtime and development dependency groups.
 
 ## CLI Commands
 
@@ -90,6 +127,65 @@ python -m fx_rates daily --base USD --symbols BRL,EUR
 ```powershell
 python -m fx_rates status --last 5
 ```
+
+### Import Stock Watchlist
+
+```powershell
+python -m fx_rates instruments import --file data/reference/top100_stocks.csv
+```
+
+Editable watchlists:
+
+- `data/reference/top100_stocks.csv`
+- `data/reference/sample_stocks.csv`
+
+### Stock Daily Ingestion
+
+```powershell
+python -m fx_rates stocks daily --watchlist data/reference/top100_stocks.csv
+```
+
+### Stock Historical Backfill
+
+```powershell
+python -m fx_rates stocks backfill --start 2026-01-01 --end 2026-04-25 --watchlist data/reference/sample_stocks.csv
+```
+
+### Quote Polling
+
+```powershell
+python -m fx_rates quotes poll --symbols AAPL,MSFT,NVDA,TSLA --interval-seconds 30 --duration-minutes 5
+```
+
+Poll a small selected set of symbols. Do not poll the full 100-stock watchlist every few seconds.
+
+### Analysis
+
+```powershell
+python -m fx_rates analyze now --symbols AAPL,MSFT,NVDA,TSLA
+python -m fx_rates analyze now --asset-type FX
+python -m fx_rates analyze now --asset-type STOCK
+```
+
+Analysis uses stored SQLite history, not invented values. It calculates last close, daily return, SMA 20, SMA 50, 20-day volatility, 30-day min/max, trend, and signal.
+
+### API Server
+
+```powershell
+python -m fx_rates serve --host 127.0.0.1 --port 8000
+```
+
+Useful endpoints:
+
+- `GET /health`
+- `GET /api/instruments`
+- `GET /api/stocks/history?symbol=AAPL&start=2026-01-01&end=2026-04-25`
+- `GET /api/fx/history?base=USD&symbol=BRL&start=2026-01-01&end=2026-04-25`
+- `GET /api/quotes/latest?symbols=AAPL,MSFT&asset_type=STOCK`
+- `GET /api/analysis/latest?asset_type=STOCK`
+- `GET /api/dashboard/summary`
+
+See `docs/API_CONTRACT.md` for JSON examples.
 
 ### Common Flags
 
@@ -161,6 +257,10 @@ These wrappers are Windows-friendly and pass through the current CLI flags, incl
 
 - `fx_rates`
 - `ingest_runs`
+- `instruments`
+- `stock_prices_daily`
+- `market_quotes_latest`
+- `analysis_snapshots`
 
 ### Analytics Views
 
@@ -239,7 +339,7 @@ python -m fx_rates backfill --start 2026-02-01 --end 2026-02-03 --base USD --sym
 Release hardening was completed with a fresh standard CPython virtual environment and the following outcomes:
 
 - `pip install -r requirements.txt` completed successfully in `.release-venv`
-- `pytest` passed: `18 passed`
+- `pytest` passed: `26 passed`
 - `backfill` completed successfully and reused the cached time-series payload for `2026-02-01..2026-02-03`
 - `daily` completed successfully with `use_cache_latest=False`, fetched live data, and wrote `2` rows
 - `status --last 5` showed the recent `backfill` and `daily` runs correctly

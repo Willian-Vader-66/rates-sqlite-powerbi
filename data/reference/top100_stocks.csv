@@ -1,0 +1,101 @@
+symbol,name,exchange,currency,sector,is_active,priority
+AAPL,Apple Inc,NASDAQ,USD,Technology,1,1
+MSFT,Microsoft Corp,NASDAQ,USD,Technology,1,2
+NVDA,NVIDIA Corp,NASDAQ,USD,Technology,1,3
+AMZN,Amazon.com Inc,NASDAQ,USD,Consumer Discretionary,1,4
+GOOGL,Alphabet Inc Class A,NASDAQ,USD,Communication Services,1,5
+META,Meta Platforms Inc,NASDAQ,USD,Communication Services,1,6
+TSLA,Tesla Inc,NASDAQ,USD,Consumer Discretionary,1,7
+BRK.B,Berkshire Hathaway Class B,NYSE,USD,Financials,1,8
+LLY,Eli Lilly and Co,NYSE,USD,Health Care,1,9
+AVGO,Broadcom Inc,NASDAQ,USD,Technology,1,10
+JPM,JPMorgan Chase and Co,NYSE,USD,Financials,1,11
+V,Visa Inc,NYSE,USD,Financials,1,12
+UNH,UnitedHealth Group Inc,NYSE,USD,Health Care,1,13
+XOM,Exxon Mobil Corp,NYSE,USD,Energy,1,14
+MA,Mastercard Inc,NYSE,USD,Financials,1,15
+JNJ,Johnson and Johnson,NYSE,USD,Health Care,1,16
+PG,Procter and Gamble Co,NYSE,USD,Consumer Staples,1,17
+HD,Home Depot Inc,NYSE,USD,Consumer Discretionary,1,18
+COST,Costco Wholesale Corp,NASDAQ,USD,Consumer Staples,1,19
+ORCL,Oracle Corp,NYSE,USD,Technology,1,20
+MRK,Merck and Co,NYSE,USD,Health Care,1,21
+ABBV,AbbVie Inc,NYSE,USD,Health Care,1,22
+BAC,Bank of America Corp,NYSE,USD,Financials,1,23
+KO,Coca-Cola Co,NYSE,USD,Consumer Staples,1,24
+NFLX,Netflix Inc,NASDAQ,USD,Communication Services,1,25
+PEP,PepsiCo Inc,NASDAQ,USD,Consumer Staples,1,26
+ADBE,Adobe Inc,NASDAQ,USD,Technology,1,27
+CRM,Salesforce Inc,NYSE,USD,Technology,1,28
+AMD,Advanced Micro Devices Inc,NASDAQ,USD,Technology,1,29
+WMT,Walmart Inc,NYSE,USD,Consumer Staples,1,30
+CSCO,Cisco Systems Inc,NASDAQ,USD,Technology,1,31
+MCD,McDonalds Corp,NYSE,USD,Consumer Discretionary,1,32
+TMO,Thermo Fisher Scientific Inc,NYSE,USD,Health Care,1,33
+ACN,Accenture PLC,NYSE,USD,Technology,1,34
+LIN,Linde PLC,NASDAQ,USD,Materials,1,35
+ABT,Abbott Laboratories,NYSE,USD,Health Care,1,36
+WFC,Wells Fargo and Co,NYSE,USD,Financials,1,37
+DIS,Walt Disney Co,NYSE,USD,Communication Services,1,38
+INTC,Intel Corp,NASDAQ,USD,Technology,1,39
+QCOM,Qualcomm Inc,NASDAQ,USD,Technology,1,40
+IBM,International Business Machines Corp,NYSE,USD,Technology,1,41
+GE,GE Aerospace,NYSE,USD,Industrials,1,42
+CAT,Caterpillar Inc,NYSE,USD,Industrials,1,43
+VZ,Verizon Communications Inc,NYSE,USD,Communication Services,1,44
+T,AT and T Inc,NYSE,USD,Communication Services,1,45
+PFE,Pfizer Inc,NYSE,USD,Health Care,1,46
+AMAT,Applied Materials Inc,NASDAQ,USD,Technology,1,47
+TXN,Texas Instruments Inc,NASDAQ,USD,Technology,1,48
+NOW,ServiceNow Inc,NYSE,USD,Technology,1,49
+INTU,Intuit Inc,NASDAQ,USD,Technology,1,50
+UBER,Uber Technologies Inc,NYSE,USD,Industrials,1,51
+BKNG,Booking Holdings Inc,NASDAQ,USD,Consumer Discretionary,1,52
+SPGI,S and P Global Inc,NYSE,USD,Financials,1,53
+GS,Goldman Sachs Group Inc,NYSE,USD,Financials,1,54
+MS,Morgan Stanley,NYSE,USD,Financials,1,55
+BLK,BlackRock Inc,NYSE,USD,Financials,1,56
+RTX,RTX Corp,NYSE,USD,Industrials,1,57
+HON,Honeywell International Inc,NASDAQ,USD,Industrials,1,58
+LOW,Lowes Companies Inc,NYSE,USD,Consumer Discretionary,1,59
+SBUX,Starbucks Corp,NASDAQ,USD,Consumer Discretionary,1,60
+NKE,Nike Inc,NYSE,USD,Consumer Discretionary,1,61
+BA,Boeing Co,NYSE,USD,Industrials,1,62
+LMT,Lockheed Martin Corp,NYSE,USD,Industrials,1,63
+DE,Deere and Co,NYSE,USD,Industrials,1,64
+UPS,United Parcel Service Inc,NYSE,USD,Industrials,1,65
+FDX,FedEx Corp,NYSE,USD,Industrials,1,66
+PLD,Prologis Inc,NYSE,USD,Real Estate,1,67
+AMGN,Amgen Inc,NASDAQ,USD,Health Care,1,68
+GILD,Gilead Sciences Inc,NASDAQ,USD,Health Care,1,69
+ISRG,Intuitive Surgical Inc,NASDAQ,USD,Health Care,1,70
+SYK,Stryker Corp,NYSE,USD,Health Care,1,71
+ELV,Elevance Health Inc,NYSE,USD,Health Care,1,72
+CVS,CVS Health Corp,NYSE,USD,Health Care,1,73
+MDT,Medtronic PLC,NYSE,USD,Health Care,1,74
+NEE,NextEra Energy Inc,NYSE,USD,Utilities,1,75
+DUK,Duke Energy Corp,NYSE,USD,Utilities,1,76
+SO,Southern Co,NYSE,USD,Utilities,1,77
+COP,ConocoPhillips,NYSE,USD,Energy,1,78
+CVX,Chevron Corp,NYSE,USD,Energy,1,79
+SLB,Schlumberger NV,NYSE,USD,Energy,1,80
+NEM,Newmont Corp,NYSE,USD,Materials,1,81
+APD,Air Products and Chemicals Inc,NYSE,USD,Materials,1,82
+RIO,Rio Tinto PLC,NYSE,USD,Materials,1,83
+SHOP,Shopify Inc,NYSE,USD,Technology,1,84
+ASML,ASML Holding NV,NASDAQ,USD,Technology,1,85
+TSM,Taiwan Semiconductor Manufacturing Co,NYSE,USD,Technology,1,86
+SAP,SAP SE,NYSE,USD,Technology,1,87
+TM,Toyota Motor Corp,NYSE,USD,Consumer Discretionary,1,88
+SONY,Sony Group Corp,NYSE,USD,Consumer Discretionary,1,89
+NVO,Novo Nordisk AS,NYSE,USD,Health Care,1,90
+AZN,AstraZeneca PLC,NASDAQ,USD,Health Care,1,91
+SHEL,Shell PLC,NYSE,USD,Energy,1,92
+BP,BP PLC,NYSE,USD,Energy,1,93
+BABA,Alibaba Group Holding Ltd,NYSE,USD,Consumer Discretionary,1,94
+PDD,PDD Holdings Inc,NASDAQ,USD,Consumer Discretionary,1,95
+TCEHY,Tencent Holdings Ltd,OTC,USD,Communication Services,1,96
+UL,Unilever PLC,NYSE,USD,Consumer Staples,1,97
+HSBC,HSBC Holdings PLC,NYSE,USD,Financials,1,98
+RY,Royal Bank of Canada,NYSE,USD,Financials,1,99
+VALE,Vale SA,NYSE,USD,Materials,1,100

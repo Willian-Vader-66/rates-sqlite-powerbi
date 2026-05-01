@@ -31,6 +31,25 @@ def test_parser_accepts_commands_and_new_flags() -> None:
     )
     assert backfill_args.command == "backfill"
 
+    stocks_args = parser.parse_args(
+        [
+            "stocks",
+            "backfill",
+            "--start",
+            "2026-01-01",
+            "--end",
+            "2026-01-02",
+            "--watchlist",
+            "data/reference/sample_stocks.csv",
+        ]
+    )
+    assert stocks_args.command == "stocks"
+    assert stocks_args.stocks_command == "backfill"
+
+    quote_args = parser.parse_args(["quotes", "poll", "--symbols", "aapl,msft", "--duration-minutes", "0"])
+    assert quote_args.command == "quotes"
+    assert quote_args.symbols == ["AAPL", "MSFT"]
+
 
 @patch("fx_rates.cli.run_status", return_value=0)
 def test_cli_status_smoke(mock_status, tmp_path: Path) -> None:

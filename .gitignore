@@ -16,16 +16,14 @@ dist/
 *.egg-info/
 
 # Runtime artifacts
-cache/*.json
+cache
 data/*.sqlite
 data/*.sqlite-*
-cache/*.json
 logs/*.log
 
 # Keep folders
 !cache/.gitkeep
 !data/.gitkeep
-!cache/.gitkeep
 !logs/.gitkeep
 
 # IDE

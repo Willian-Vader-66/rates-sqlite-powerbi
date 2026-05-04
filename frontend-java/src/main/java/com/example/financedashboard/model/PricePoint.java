@@ -10,6 +10,8 @@ public record PricePoint(
         String base,
         String exchange,
         Double rate,
+        Double value,
+        @JsonProperty("price_usd") Double priceUsd,
         Double open,
         Double high,
         Double low,
@@ -22,6 +24,15 @@ public record PricePoint(
         @JsonProperty("fetched_at") String fetchedAt
 ) {
     public Double displayValue() {
-        return close != null ? close : rate;
+        if (close != null) {
+            return close;
+        }
+        if (rate != null) {
+            return rate;
+        }
+        if (priceUsd != null) {
+            return priceUsd;
+        }
+        return value;
     }
 }

@@ -42,6 +42,27 @@ def test_api_health(tmp_path: Path) -> None:
     assert payload["provider"]["name"] == "mock"
 
 
+def test_api_system_status_reports_empty_database_path(tmp_path: Path) -> None:
+    db_path = tmp_path / "fx.sqlite"
+    initialize_schema(str(db_path))
+    client = TestClient(create_app(_settings(str(db_path))))
+
+    response = client.get("/api/system/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert Path(payload["db_path"]) == db_path.resolve()
+    assert payload["db_exists"] is True
+    assert payload["db_size_bytes"] > 0
+    assert payload["total_instruments"] == 0
+    assert payload["latest_quote_count"] == 0
+    assert payload["latest_analysis_count"] == 0
+    assert payload["historical_row_count"] == 0
+    assert payload["is_empty"] is True
+    assert payload["recommended_prepare_command"] == "python -m fx_rates dashboard prepare-demo --years 4 --demo"
+    assert "Run prepare-demo" in payload["message"]
+
+
 def test_api_dashboard_summary(tmp_path: Path) -> None:
     db_path = str(tmp_path / "fx.sqlite")
     initialize_schema(db_path)

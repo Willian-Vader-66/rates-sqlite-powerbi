@@ -33,7 +33,7 @@
 .content {
     -fx-padding: 18;
     -fx-spacing: 14;
-    -fx-background-color: radial-gradient(center 20% 10%, radius 80%, #101a33, #060915);
+    -fx-background-color: #07101f;
 }
 
 .metric-row {
@@ -46,11 +46,11 @@
 .detail-panel,
 .chart-panel {
     -fx-background-color: rgba(8, 16, 33, 0.94);
-    -fx-border-color: rgba(24, 216, 255, 0.38);
+    -fx-border-color: rgba(91, 141, 168, 0.28);
     -fx-border-radius: 10;
     -fx-background-radius: 10;
     -fx-padding: 14;
-    -fx-effect: dropshadow(gaussian, rgba(0, 229, 255, 0.16), 14, 0.18, 0, 0);
+    -fx-effect: dropshadow(gaussian, rgba(0, 0, 0, 0.20), 12, 0.18, 0, 2);
 }
 
 .metric-card {
@@ -66,8 +66,89 @@
 
 .metric-value {
     -fx-text-fill: #70ffdf;
-    -fx-font-size: 24px;
+    -fx-font-size: 22px;
     -fx-font-weight: 800;
+}
+
+.overview-page {
+    -fx-padding: 4 2 18 2;
+    -fx-spacing: 14;
+}
+
+.dashboard-scroll {
+    -fx-background-color: transparent;
+    -fx-background: transparent;
+}
+
+.dashboard-scroll > .viewport {
+    -fx-background-color: transparent;
+}
+
+.dashboard-tabs {
+    -fx-background-color: transparent;
+}
+
+.dashboard-tabs .tab-header-area .tab-header-background {
+    -fx-background-color: transparent;
+}
+
+.dashboard-tabs .tab {
+    -fx-background-color: rgba(12, 24, 46, 0.92);
+    -fx-background-radius: 8 8 0 0;
+    -fx-border-color: rgba(91, 141, 168, 0.20);
+    -fx-border-radius: 8 8 0 0;
+    -fx-padding: 8 16 8 16;
+}
+
+.dashboard-tabs .tab:selected {
+    -fx-background-color: rgba(0, 229, 255, 0.16);
+    -fx-border-color: rgba(0, 229, 255, 0.45);
+}
+
+.dashboard-tabs .tab .tab-label {
+    -fx-text-fill: #cdefff;
+    -fx-font-weight: 800;
+}
+
+.dashboard-tabs .tab-content-area {
+    -fx-background-color: transparent;
+}
+
+.mini-chart-card {
+    -fx-background-color: rgba(6, 14, 28, 0.96);
+    -fx-border-color: rgba(91, 141, 168, 0.24);
+    -fx-border-radius: 8;
+    -fx-background-radius: 8;
+    -fx-padding: 12;
+    -fx-pref-width: 345;
+}
+
+.chart-grid {
+    -fx-padding: 2;
+}
+
+.empty-state {
+    -fx-text-fill: #8fa9bd;
+    -fx-font-size: 13px;
+    -fx-padding: 14;
+}
+
+.stock-performance-row {
+    -fx-background-color: rgba(7, 17, 31, 0.82);
+    -fx-background-radius: 7;
+    -fx-border-color: rgba(91, 141, 168, 0.18);
+    -fx-border-radius: 7;
+    -fx-padding: 8 10 8 10;
+    -fx-text-fill: #d9f4ff;
+    -fx-font-weight: 600;
+}
+
+.status-up {
+    -fx-border-color: rgba(112, 255, 223, 0.36);
+}
+
+.status-down {
+    -fx-border-color: rgba(251, 113, 133, 0.42);
 }
 
 .panel-title {
@@ -183,12 +264,12 @@
 }
 
 .chart-plot-background {
-    -fx-background-color: #07111f;
+    -fx-background-color: #081322;
 }
 
 .chart-series-line {
     -fx-stroke: #00e5ff;
-    -fx-stroke-width: 2.2px;
+    -fx-stroke-width: 2px;
 }
 
 .chart-line-symbol {
@@ -201,6 +282,11 @@
 
 .axis-label {
     -fx-text-fill: #7dd3fc;
+}
+
+.chart-horizontal-grid-lines,
+.chart-vertical-grid-lines {
+    -fx-stroke: rgba(148, 163, 184, 0.13);
 }
 
 .error-banner,

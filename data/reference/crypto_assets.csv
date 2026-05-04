@@ -1,0 +1,11 @@
+symbol,name,provider_code,is_active,priority
+BTC,Bitcoin,bitcoin,1,1
+ETH,Ethereum,ethereum,1,2
+BNB,BNB,binancecoin,1,3
+SOL,Solana,solana,1,4
+XRP,XRP,ripple,1,5
+ADA,Cardano,cardano,1,6
+DOGE,Dogecoin,dogecoin,1,7
+AVAX,Avalanche,avalanche-2,1,8
+DOT,Polkadot,polkadot,1,9
+LINK,Chainlink,chainlink,1,10

@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 
 from .utils import ensure_dir, ensure_parent_dir, parse_bool, validate_log_level
 
 
-load_dotenv()
+DOTENV_PATH = find_dotenv(usecwd=True)
+PROJECT_ROOT = Path(DOTENV_PATH).resolve().parent if DOTENV_PATH else Path.cwd().resolve()
+load_dotenv(DOTENV_PATH or None)
 
 
 @dataclass(frozen=True)
@@ -60,9 +63,9 @@ def load_settings(args: object | None = None) -> Settings:
     api_port_arg = getattr(args, "port", None)
 
     api_base_url = os.getenv("API_BASE_URL", DEFAULTS.api_base_url).rstrip("/")
-    db_path = db_path_arg or os.getenv("DB_PATH", DEFAULTS.db_path)
-    cache_dir = cache_dir_arg or os.getenv("CACHE_DIR", DEFAULTS.cache_dir)
-    log_file = log_file_arg or os.getenv("LOG_FILE", DEFAULTS.log_file)
+    db_path = _resolve_path(db_path_arg, os.getenv("DB_PATH", DEFAULTS.db_path), base_dir=PROJECT_ROOT)
+    cache_dir = _resolve_path(cache_dir_arg, os.getenv("CACHE_DIR", DEFAULTS.cache_dir), base_dir=PROJECT_ROOT)
+    log_file = _resolve_path(log_file_arg, os.getenv("LOG_FILE", DEFAULTS.log_file), base_dir=PROJECT_ROOT)
     log_level = validate_log_level(log_level_arg or os.getenv("LOG_LEVEL", DEFAULTS.log_level))
 
     timeout_raw = timeout_arg if timeout_arg is not None else os.getenv("TIMEOUT_SECONDS", str(DEFAULTS.timeout_seconds))
@@ -128,3 +131,12 @@ def ensure_runtime_dirs(settings: Settings) -> None:
     ensure_parent_dir(settings.db_path)
     ensure_dir(settings.cache_dir)
     ensure_parent_dir(settings.log_file)
+
+
+def _resolve_path(cli_value: str | None, configured_value: str, *, base_dir: Path) -> str:
+    raw = cli_value if cli_value is not None else configured_value
+    path = Path(raw).expanduser()
+    if path.is_absolute():
+        return str(path)
+    anchor = Path.cwd().resolve() if cli_value is not None else base_dir
+    return str((anchor / path).resolve())

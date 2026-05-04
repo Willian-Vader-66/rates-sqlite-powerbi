@@ -82,9 +82,10 @@ The environment variable `FINANCE_API_BASE_URL` takes precedence over the proper
 
 ## Features
 
-- Dashboard summary cards for total instruments, active stocks, active FX, latest quotes, failed runs, and last successful ingest.
+- Overview tab with summary cards, market overview cards, fixed 30-day mini charts, and top company performance.
+- Dashboard summary cards for total instruments, active stocks, active FX, active crypto, macro indicators, latest quotes, failed runs, and last successful ingest.
 - Watchlist table combining instruments, latest quotes, and latest analysis snapshots.
-- Filters for search, asset type, signal, and active instruments.
+- Filters for search, asset type, signal, trend, exchange, sector, and active instruments.
 - Instrument detail panel with latest quote, analysis snapshot, and historical line chart.
 - Background polling every `refresh.interval.seconds`, defaulting to 30 seconds.
 - HTTP requests use `http.timeout.seconds`, defaulting to 30 seconds.
@@ -129,6 +130,9 @@ The backend may be running with an empty SQLite database. Seed data in demo mode
 $env:MARKET_DATA_DEMO_MODE='true'
 python -m fx_rates instruments import --file data/reference/sample_stocks.csv
 python -m fx_rates stocks backfill --start 2026-01-01 --end 2026-01-10 --watchlist data/reference/sample_stocks.csv
+python -m fx_rates crypto backfill --start 2026-01-01 --end 2026-01-10 --symbols BTC,ETH
+python -m fx_rates macro backfill --start 2026-01-01 --end 2026-01-10
+python -m fx_rates crypto quotes --symbols BTC,ETH
 python -m fx_rates quotes poll --symbols AAPL,MSFT,NVDA --interval-seconds 5 --duration-minutes 0
 python -m fx_rates analyze now --symbols AAPL,MSFT,NVDA
 ```

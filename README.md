@@ -1,6 +1,6 @@
 # fx-rates-sqlite-powerbi
 
-Local financial market data backend that fetches public exchange rates from the Frankfurter API, stores FX and stock history in SQLite with idempotent UPSERT behavior, runs lightweight analysis over stored data, and exposes a local HTTP API for future front-ends.
+Local financial market data backend that fetches public exchange rates from the Frankfurter API, stores FX, stock, crypto, and macro history in SQLite with idempotent UPSERT behavior, runs lightweight analysis over stored data, and exposes a local HTTP API for JavaFX or future front-ends.
 
 ## What This Project Is
 
@@ -9,8 +9,12 @@ This repository started as a small but production-minded local pipeline for fore
 - `backfill` downloads a date range
 - `daily` fetches the latest available business day
 - `stocks backfill` and `stocks daily` ingest daily stock history from an editable watchlist
+- `crypto backfill`, `crypto daily`, and `crypto quotes` add crypto history and latest quotes
+- `macro backfill`, `macro daily`, and `macro status` add macro indicators such as Selic
 - `quotes poll` refreshes latest quotes through safe polling for selected symbols
-- `analyze now` creates stock and FX analysis snapshots from data already stored in SQLite
+- `analyze now` creates stock, FX, crypto, and macro analysis snapshots from data already stored in SQLite
+- `dashboard prepare-demo` prepares a complete local SQLite dataset for the JavaFX Finance Monitor
+- `dashboard audit` reports dashboard readiness, coverage, missing quotes/analysis, and duplicate instrument keys
 - `serve` exposes a local HTTP API for Java or other front-ends
 - backfill/time-series responses are cached on disk
 - daily/latest fetches fresh data by default
@@ -26,7 +30,9 @@ This is not a professional trading platform. Quote collection is near-real-time 
 Frankfurter API -> FX ingest CLI -----------+
                                             |
 Twelve Data API -> stock/quote providers -> Python backend -> SQLite
-Mock provider  -> demo/test data -----------+        |
+CoinGecko API  -> crypto provider ----------+        |
+BCB SGS API    -> macro provider -----------+        |
+Mock providers -> demo/test data -----------+        |
                                                      v
                                            FastAPI local HTTP API
                                                      |
@@ -96,17 +102,72 @@ API_PORT=8000
 
 CLI flags override `.env` values for the same setting.
 
-For stock data, create a Twelve Data API key and set `TWELVE_DATA_API_KEY`. For local demos, tests, and UI work without a key, set:
+For stock data, create a Twelve Data API key and set `TWELVE_DATA_API_KEY`. Macro data uses Banco Central SGS and crypto data uses CoinGecko when demo mode is off. For local demos, tests, and UI work without external API access, set:
 
 ```dotenv
 MARKET_DATA_DEMO_MODE=true
 ```
 
-Demo mode uses deterministic realistic-looking data from `MockMarketDataProvider`.
+Demo mode and `--demo` use deterministic synthetic data designed for portfolio demos and local validation without API keys.
+It is visually plausible, but it is not real market history.
+Stocks use `MockMarketDataProvider`.
+Macro and crypto demo data come from `MockMacroProvider` and `MockCryptoProvider`; the Java UI never hardcodes fake market data.
 
 Dependency note: `httpx` is listed with the main requirements because FastAPI's `TestClient` needs it and this project does not yet split runtime and development dependency groups.
 
 ## CLI Commands
+
+### Prepare The Local Dashboard
+
+Use this before opening the JavaFX Finance Monitor on a fresh or sparse SQLite database. It imports the curated dashboard instruments, creates deterministic historical demo data, writes latest quotes, and generates analysis snapshots in the configured SQLite database.
+
+```powershell
+cd C:\Projetos_Local\rates-sqlite-powerbi
+.\.venv\Scripts\Activate.ps1
+$env:MARKET_DATA_DEMO_MODE='true'
+python -m fx_rates dashboard prepare-demo --years 4 --demo
+python -m fx_rates serve --host 127.0.0.1 --port 8000
+```
+
+In another terminal:
+
+```powershell
+cd C:\Projetos_Local\rates-sqlite-powerbi\frontend-java
+mvn javafx:run
+```
+
+The default prepare command loads the first 32 active stocks from `data/reference/top100_stocks.csv`, all active currencies from `data/reference/currencies.csv` as USD-based FX series, BTC/ETH and the other curated crypto assets, and macro indicators including Selic. Use `--stock-limit 100` when you want the full stock reference list.
+
+Audit the prepared data:
+
+```powershell
+python -m fx_rates dashboard audit
+```
+
+Expected demo readiness is at least 68 instruments, no missing latest quotes, no missing analysis snapshots, and four-year coverage for USD/BRL, USD/EUR, BTC, ETH, Selic, and the major stocks.
+
+### Como resolver dashboard sem dados
+
+If JavaFX connects to the API but the dashboard is empty, confirm that `prepare-demo` and `serve` are using the same SQLite file. Relative `DB_PATH` values from `.env`, such as `data/fx.sqlite`, are resolved from the project root; explicit `--db-path` values are honored by each command.
+
+PowerShell:
+
+```powershell
+cd C:\Projetos_Local\rates-sqlite-powerbi
+.\.venv\Scripts\Activate.ps1
+python -m fx_rates dashboard prepare-demo --years 4 --demo
+python -m fx_rates dashboard audit
+python -m fx_rates serve --host 127.0.0.1 --port 8000
+```
+
+In another terminal:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/api/system/status
+Invoke-RestMethod http://127.0.0.1:8000/api/dashboard/summary
+```
+
+Check that `/api/system/status.db_path` matches the path printed by `dashboard audit`. If `is_empty` is `true`, rerun `prepare-demo`, restart the backend, and check the same endpoint again.
 
 ### Backfill
 
@@ -159,6 +220,26 @@ python -m fx_rates quotes poll --symbols AAPL,MSFT,NVDA,TSLA --interval-seconds 
 
 Poll a small selected set of symbols. Do not poll the full 100-stock watchlist every few seconds.
 
+### Crypto History And Quotes
+
+```powershell
+python -m fx_rates crypto backfill --start 2026-01-01 --end 2026-04-25 --symbols BTC,ETH
+python -m fx_rates crypto daily
+python -m fx_rates crypto quotes --symbols BTC,ETH,SOL
+```
+
+Crypto references live in `data/reference/crypto_assets.csv`. Demo mode uses deterministic backend-generated data. Live crypto support uses CoinGecko's public API and should be used with reasonable cadence.
+
+### Macro Indicators
+
+```powershell
+python -m fx_rates macro backfill --start 2026-01-01 --end 2026-04-25
+python -m fx_rates macro daily
+python -m fx_rates macro status
+```
+
+Macro references live in `data/reference/macro_indicators.csv`. The initial seeds are Selic daily, monthly, and annualized monthly using Banco Central SGS provider codes.
+
 ### Analysis
 
 ```powershell
@@ -184,6 +265,11 @@ Useful endpoints:
 - `GET /api/quotes/latest?symbols=AAPL,MSFT&asset_type=STOCK`
 - `GET /api/analysis/latest?asset_type=STOCK`
 - `GET /api/dashboard/summary`
+- `GET /api/dashboard/market-overview`
+- `GET /api/dashboard/fixed-charts`
+- `GET /api/dashboard/top-stocks-30d`
+- `GET /api/crypto/history?symbol=BTC&start=2026-01-01&end=2026-04-25`
+- `GET /api/macro/history?indicator_code=SELIC_DAILY&start=2026-01-01&end=2026-04-25`
 
 See `docs/API_CONTRACT.md` for JSON examples.
 

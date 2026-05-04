@@ -50,6 +50,16 @@ def test_parser_accepts_commands_and_new_flags() -> None:
     assert quote_args.command == "quotes"
     assert quote_args.symbols == ["AAPL", "MSFT"]
 
+    dashboard_args = parser.parse_args(["dashboard", "prepare-demo", "--years", "4", "--demo"])
+    assert dashboard_args.command == "dashboard"
+    assert dashboard_args.dashboard_command == "prepare-demo"
+    assert dashboard_args.years == 4
+    assert dashboard_args.demo is True
+
+    audit_args = parser.parse_args(["dashboard", "audit", "--expected-years", "4"])
+    assert audit_args.dashboard_command == "audit"
+    assert audit_args.expected_years == 4
+
 
 @patch("fx_rates.cli.run_status", return_value=0)
 def test_cli_status_smoke(mock_status, tmp_path: Path) -> None:

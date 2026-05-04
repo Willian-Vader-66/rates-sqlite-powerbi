@@ -43,6 +43,7 @@ public class InstrumentTableController {
     private final ComboBox<String> sectorFilter = new ComboBox<>();
     private final CheckBox activeOnly = new CheckBox("Active only");
     private final Button clearFilters = new Button("Clear Filters");
+    private final Label countLabel = new Label("Showing 0 of 0 instruments");
     private final VBox view = new VBox(10);
     private Consumer<WatchRow> selectionHandler = row -> {};
     private String selectedAsset = "ALL";
@@ -54,7 +55,7 @@ public class InstrumentTableController {
         configureTable();
         Label title = new Label("Watchlist");
         title.getStyleClass().add("panel-title");
-        HBox filterBar = new HBox(10, new Label("Search"), searchField, activeOnly, clearFilters);
+        HBox filterBar = new HBox(10, new Label("Search"), searchField, activeOnly, clearFilters, countLabel);
         filterBar.getStyleClass().add("filter-bar");
         filterBar.setAlignment(Pos.CENTER_LEFT);
         HBox.setHgrow(searchField, Priority.ALWAYS);
@@ -65,6 +66,7 @@ public class InstrumentTableController {
         dropdownBar.setAlignment(Pos.CENTER_LEFT);
         view.getChildren().addAll(title, filterBar, chipRow("Asset", assetChips), chipRow("Signal", signalChips), chipRow("Trend", trendChips), dropdownBar, table);
         VBox.setVgrow(table, Priority.ALWAYS);
+        filteredRows.addListener((javafx.collections.ListChangeListener<WatchRow>) change -> updateCountLabel());
     }
 
     public VBox getView() {
@@ -104,6 +106,7 @@ public class InstrumentTableController {
         updateDynamicFilters(updatedRows);
         rows.setAll(updatedRows);
         applyFilter();
+        updateCountLabel();
         if (selectedSymbol != null) {
             rows.stream()
                     .filter(row -> row.symbol().equals(selectedSymbol))
@@ -114,7 +117,7 @@ public class InstrumentTableController {
 
     private void configureFilters() {
         searchField.setPromptText("Symbol or name");
-        buildChipGroup(assetChips, List.of("ALL", "STOCK", "FX"), value -> {
+        buildChipGroup(assetChips, List.of("ALL", "STOCK", "FX", "CRYPTO", "MACRO"), value -> {
             selectedAsset = value;
             applyFilter();
         });
@@ -193,6 +196,7 @@ public class InstrumentTableController {
                     || Objects.toString(row.symbol(), "").toLowerCase(Locale.ROOT).contains(search)
                     || Objects.toString(row.name(), "").toLowerCase(Locale.ROOT).contains(search);
         });
+        updateCountLabel();
     }
 
     private HBox chipRow(String label, HBox chips) {
@@ -254,6 +258,10 @@ public class InstrumentTableController {
         resetChipGroup(signalChips);
         resetChipGroup(trendChips);
         applyFilter();
+    }
+
+    private void updateCountLabel() {
+        countLabel.setText("Showing %s of %s instruments".formatted(filteredRows.size(), rows.size()));
     }
 
     private void resetChipGroup(HBox container) {

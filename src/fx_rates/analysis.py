@@ -10,8 +10,9 @@ from .models import AnalysisSnapshotRow
 from .utils import normalize_symbol_list, utc_now_iso
 
 VOLATILITY_THRESHOLD = 0.035
-NEAR_HIGH_RATIO = 0.98
-NEAR_LOW_RATIO = 1.02
+BREAKOUT_THRESHOLD = 0.05
+DRAWDOWN_THRESHOLD = -0.05
+STABLE_THRESHOLD = 0.01
 
 
 def run_analyze_now(settings: Settings, symbols: list[str] | None = None, asset_type: str | None = None) -> int:
@@ -26,19 +27,23 @@ def build_analysis_snapshots(
     asset_type: str | None = None,
 ) -> list[AnalysisSnapshotRow]:
     normalized_type = asset_type.strip().upper() if asset_type else None
-    if normalized_type not in {None, "STOCK", "FX"}:
-        raise ValueError("--asset-type deve ser STOCK ou FX")
+    if normalized_type not in {None, "STOCK", "FX", "CRYPTO", "MACRO"}:
+        raise ValueError("--asset-type deve ser STOCK, FX, CRYPTO ou MACRO")
 
     snapshots: list[AnalysisSnapshotRow] = []
     if normalized_type in {None, "STOCK"}:
         snapshots.extend(_build_stock_snapshots(db_path, symbols))
     if normalized_type in {None, "FX"}:
         snapshots.extend(_build_fx_snapshots(db_path, symbols))
+    if normalized_type in {None, "CRYPTO"}:
+        snapshots.extend(_build_crypto_snapshots(db_path, symbols))
+    if normalized_type in {None, "MACRO"}:
+        snapshots.extend(_build_macro_snapshots(db_path, symbols))
     return snapshots
 
 
 def _build_stock_snapshots(db_path: str, symbols: list[str] | None) -> list[AnalysisSnapshotRow]:
-    target_symbols = normalize_symbol_list(symbols) if symbols else _stock_symbols(db_path)
+    target_symbols = normalize_symbol_list(symbols) if symbols else _symbols_from_table(db_path, "stock_prices_daily", "symbol")
     snapshots: list[AnalysisSnapshotRow] = []
     for symbol in target_symbols:
         rows = _history_rows(
@@ -58,15 +63,14 @@ def _build_stock_snapshots(db_path: str, symbols: list[str] | None) -> list[Anal
 
 def _build_fx_snapshots(db_path: str, symbols: list[str] | None) -> list[AnalysisSnapshotRow]:
     requested = normalize_symbol_list(symbols) if symbols else None
-    pairs = _fx_pairs(db_path, requested)
     snapshots: list[AnalysisSnapshotRow] = []
-    for base, symbol in pairs:
+    for base, symbol in _fx_pairs(db_path, requested):
         rows = _history_rows(
             db_path,
             """
             SELECT date, symbol, base AS exchange, rate AS value
             FROM fx_rates
-            WHERE base = ? AND symbol = ?
+            WHERE base = ? AND symbol = ? AND rate IS NOT NULL
             ORDER BY date
             """,
             [base, symbol],
@@ -76,41 +80,80 @@ def _build_fx_snapshots(db_path: str, symbols: list[str] | None) -> list[Analysi
     return snapshots
 
 
-def _snapshot_from_series(symbol: str, asset_type: str, exchange: str | None, rows: list[dict[str, Any]]) -> AnalysisSnapshotRow:
-    values = [float(row["value"]) for row in rows if row["value"] is not None]
-    generated_at = utc_now_iso()
-    if len(values) < 2:
-        return AnalysisSnapshotRow(
-            symbol=symbol,
-            asset_type=asset_type,
-            exchange=exchange,
-            generated_at=generated_at,
-            last_price=values[-1] if values else None,
-            last_close=values[-1] if values else None,
-            daily_return=None,
-            sma_20=None,
-            sma_50=None,
-            volatility_20=None,
-            min_30d=None,
-            max_30d=None,
-            trend="UNKNOWN",
-            signal="UNKNOWN",
-            notes="insufficient data",
+def _build_crypto_snapshots(db_path: str, symbols: list[str] | None) -> list[AnalysisSnapshotRow]:
+    target_symbols = normalize_symbol_list(symbols) if symbols else _symbols_from_table(db_path, "crypto_prices_daily", "symbol")
+    snapshots: list[AnalysisSnapshotRow] = []
+    for symbol in target_symbols:
+        rows = _history_rows(
+            db_path,
+            """
+            SELECT date, symbol, 'CRYPTO' AS exchange, price_usd AS value
+            FROM crypto_prices_daily
+            WHERE symbol = ? AND price_usd IS NOT NULL
+            ORDER BY date
+            """,
+            [symbol],
         )
+        if rows:
+            snapshots.append(_snapshot_from_series(symbol=symbol, asset_type="CRYPTO", exchange="CRYPTO", rows=rows))
+    return snapshots
+
+
+def _build_macro_snapshots(db_path: str, symbols: list[str] | None) -> list[AnalysisSnapshotRow]:
+    target_symbols = normalize_symbol_list(symbols) if symbols else _symbols_from_table(
+        db_path, "macro_indicators_daily", "indicator_code"
+    )
+    snapshots: list[AnalysisSnapshotRow] = []
+    for symbol in target_symbols:
+        rows = _history_rows(
+            db_path,
+            """
+            SELECT date, indicator_code AS symbol, 'MACRO' AS exchange, value
+            FROM macro_indicators_daily
+            WHERE indicator_code = ? AND value IS NOT NULL
+            ORDER BY date
+            """,
+            [symbol],
+        )
+        if rows:
+            snapshots.append(_snapshot_from_series(symbol=symbol, asset_type="MACRO", exchange="MACRO", rows=rows, macro=True))
+    return snapshots
+
+
+def _snapshot_from_series(
+    symbol: str,
+    asset_type: str,
+    exchange: str | None,
+    rows: list[dict[str, Any]],
+    macro: bool = False,
+) -> AnalysisSnapshotRow:
+    dated_values = [(row["date"], float(row["value"])) for row in rows if row["value"] is not None]
+    values = [value for _, value in dated_values]
+    generated_at = utc_now_iso()
+    if not values:
+        return _empty_snapshot(symbol, asset_type, exchange, generated_at, "no historical data")
 
     last = values[-1]
-    previous = values[-2]
-    daily_return = (last / previous) - 1 if previous else None
+    previous = values[-2] if len(values) >= 2 else None
+    daily_return = _ratio_change(previous, last)
+    change_30d = _period_change(values, 30)
+    change_90d = _period_change(values, 90)
+    change_1y = _period_change(values, 252 if asset_type == "STOCK" else 365)
     sma_20 = _mean(values[-20:]) if len(values) >= 20 else None
     sma_50 = _mean(values[-50:]) if len(values) >= 50 else None
     returns = _returns(values[-21:])
-    volatility_20 = pstdev(returns) if len(returns) >= 20 else None
-    min_30d = min(values[-30:]) if len(values) >= 30 else None
-    max_30d = max(values[-30:]) if len(values) >= 30 else None
-    trend = _trend(last, sma_20, sma_50)
-    signal = _signal(last, volatility_20, min_30d, max_30d)
-    notes = None if signal != "UNKNOWN" else "insufficient data"
+    volatility_20 = pstdev(returns) if len(returns) >= 2 else None
+    min_30d = min(values[-30:]) if len(values) >= 2 else None
+    max_30d = max(values[-30:]) if len(values) >= 2 else None
 
+    if macro:
+        trend = _macro_trend(change_90d if change_90d is not None else change_30d, volatility_20)
+        signal = trend
+    else:
+        trend = _trend(last, sma_20, sma_50, change_30d)
+        signal = _signal(change_30d, volatility_20, min_30d, max_30d, last)
+
+    notes = _coverage_note(dated_values[0][0], dated_values[-1][0], len(values), asset_type)
     return AnalysisSnapshotRow(
         symbol=symbol,
         asset_type=asset_type,
@@ -119,6 +162,9 @@ def _snapshot_from_series(symbol: str, asset_type: str, exchange: str | None, ro
         last_price=last,
         last_close=last,
         daily_return=daily_return,
+        change_30d=change_30d,
+        change_90d=change_90d,
+        change_1y=change_1y,
         sma_20=sma_20,
         sma_50=sma_50,
         volatility_20=volatility_20,
@@ -130,9 +176,38 @@ def _snapshot_from_series(symbol: str, asset_type: str, exchange: str | None, ro
     )
 
 
-def _stock_symbols(db_path: str) -> list[str]:
+def _empty_snapshot(
+    symbol: str,
+    asset_type: str,
+    exchange: str | None,
+    generated_at: str,
+    notes: str,
+) -> AnalysisSnapshotRow:
+    return AnalysisSnapshotRow(
+        symbol=symbol,
+        asset_type=asset_type,
+        exchange=exchange,
+        generated_at=generated_at,
+        last_price=None,
+        last_close=None,
+        daily_return=None,
+        change_30d=None,
+        change_90d=None,
+        change_1y=None,
+        sma_20=None,
+        sma_50=None,
+        volatility_20=None,
+        min_30d=None,
+        max_30d=None,
+        trend="UNKNOWN",
+        signal="UNKNOWN",
+        notes=notes,
+    )
+
+
+def _symbols_from_table(db_path: str, table: str, column: str) -> list[str]:
     with sqlite3.connect(db_path) as conn:
-        rows = conn.execute("SELECT DISTINCT symbol FROM stock_prices_daily ORDER BY symbol").fetchall()
+        rows = conn.execute(f"SELECT DISTINCT {column} FROM {table} ORDER BY {column}").fetchall()
     return [str(row[0]) for row in rows]
 
 
@@ -169,27 +244,72 @@ def _returns(values: list[float]) -> list[float]:
     return result
 
 
+def _period_change(values: list[float], offset: int) -> float | None:
+    if len(values) < 2:
+        return None
+    index = max(0, len(values) - offset - 1)
+    return _ratio_change(values[index], values[-1])
+
+
+def _ratio_change(start: float | None, end: float | None) -> float | None:
+    if start is None or end is None or float(start) == 0:
+        return None
+    return (float(end) / float(start)) - 1.0
+
+
 def _mean(values: list[float]) -> float:
     return sum(values) / len(values)
 
 
-def _trend(last: float, sma_20: float | None, sma_50: float | None) -> str:
-    if sma_20 is None or sma_50 is None:
-        return "UNKNOWN"
-    if sma_20 > sma_50 and last > sma_20:
+def _trend(last: float, sma_20: float | None, sma_50: float | None, change_30d: float | None) -> str:
+    if sma_20 is None:
+        return "UNKNOWN" if change_30d is None else "SIDEWAYS"
+    if sma_50 is None:
+        if last > sma_20:
+            return "UP"
+        if last < sma_20:
+            return "DOWN"
+        return "SIDEWAYS"
+    if last > sma_20 and sma_20 >= sma_50:
         return "UP"
-    if sma_20 < sma_50 and last < sma_20:
+    if last < sma_20 and sma_20 <= sma_50:
         return "DOWN"
+    if change_30d is not None and abs(change_30d) < STABLE_THRESHOLD:
+        return "SIDEWAYS"
     return "SIDEWAYS"
 
 
-def _signal(last: float, volatility_20: float | None, min_30d: float | None, max_30d: float | None) -> str:
-    if volatility_20 is None or min_30d is None or max_30d is None:
+def _signal(
+    change_30d: float | None,
+    volatility_20: float | None,
+    min_30d: float | None,
+    max_30d: float | None,
+    last: float,
+) -> str:
+    if change_30d is None:
         return "UNKNOWN"
-    if volatility_20 > VOLATILITY_THRESHOLD:
+    if volatility_20 is not None and volatility_20 > VOLATILITY_THRESHOLD:
         return "VOLATILE"
-    if max_30d and last >= max_30d * NEAR_HIGH_RATIO:
+    if change_30d >= BREAKOUT_THRESHOLD or (max_30d is not None and last >= max_30d * 0.995 and change_30d > 0):
         return "BREAKOUT"
-    if min_30d and last <= min_30d * NEAR_LOW_RATIO:
+    if change_30d <= DRAWDOWN_THRESHOLD or (min_30d is not None and last <= min_30d * 1.005 and change_30d < 0):
         return "DRAWDOWN"
+    if abs(change_30d) <= STABLE_THRESHOLD and (volatility_20 is None or volatility_20 <= VOLATILITY_THRESHOLD):
+        return "STABLE"
+    return "WATCH"
+
+
+def _macro_trend(change: float | None, volatility_20: float | None) -> str:
+    if change is None:
+        return "UNKNOWN"
+    if abs(change) <= STABLE_THRESHOLD or (volatility_20 is not None and volatility_20 <= 0.001):
+        return "STABLE"
+    if change > 0:
+        return "UP"
+    if change < 0:
+        return "DOWN"
     return "STABLE"
+
+
+def _coverage_note(start: str, end: str, count: int, asset_type: str) -> str:
+    return f"coverage {start} to {end}; points={count}; asset_type={asset_type}"

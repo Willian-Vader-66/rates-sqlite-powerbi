@@ -1,13 +1,17 @@
 package com.example.financedashboard.util;
 
 import java.text.DecimalFormat;
+import java.text.DecimalFormatSymbols;
 import java.text.NumberFormat;
 import java.util.Locale;
 
 public final class FormatUtils {
-    private static final NumberFormat INTEGER = NumberFormat.getIntegerInstance(Locale.US);
-    private static final DecimalFormat PRICE = new DecimalFormat("#,##0.00##");
-    private static final DecimalFormat PERCENT = new DecimalFormat("+#,##0.00%;-#,##0.00%");
+    // Dashboard labels are English today, so numeric display is intentionally Locale.US.
+    private static final Locale DASHBOARD_LOCALE = Locale.US;
+    private static final DecimalFormatSymbols DASHBOARD_SYMBOLS = DecimalFormatSymbols.getInstance(DASHBOARD_LOCALE);
+    private static final NumberFormat INTEGER = NumberFormat.getIntegerInstance(DASHBOARD_LOCALE);
+    private static final DecimalFormat PRICE = new DecimalFormat("#,##0.00", DASHBOARD_SYMBOLS);
+    private static final DecimalFormat PERCENT = new DecimalFormat("+#,##0.00%;-#,##0.00%", DASHBOARD_SYMBOLS);
 
     private FormatUtils() {
     }

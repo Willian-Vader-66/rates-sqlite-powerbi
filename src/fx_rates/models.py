@@ -136,6 +136,9 @@ class AnalysisSnapshotRow:
     last_price: float | None
     last_close: float | None
     daily_return: float | None
+    change_30d: float | None
+    change_90d: float | None
+    change_1y: float | None
     sma_20: float | None
     sma_50: float | None
     volatility_20: float | None
@@ -154,6 +157,9 @@ class AnalysisSnapshotRow:
             "last_price": self.last_price,
             "last_close": self.last_close,
             "daily_return": self.daily_return,
+            "change_30d": self.change_30d,
+            "change_90d": self.change_90d,
+            "change_1y": self.change_1y,
             "sma_20": self.sma_20,
             "sma_50": self.sma_50,
             "volatility_20": self.volatility_20,
@@ -162,4 +168,52 @@ class AnalysisSnapshotRow:
             "trend": self.trend,
             "signal": self.signal,
             "notes": self.notes,
+        }
+
+
+@dataclass(frozen=True)
+class MacroIndicatorDailyRow:
+    date: str
+    indicator_code: str
+    indicator_name: str
+    value: float | None
+    unit: str | None
+    source: str | None
+    fetched_at: str
+
+    def as_db_dict(self) -> dict[str, str | float | None]:
+        return {
+            "date": self.date,
+            "indicator_code": self.indicator_code,
+            "indicator_name": self.indicator_name,
+            "value": self.value,
+            "unit": self.unit,
+            "source": self.source,
+            "fetched_at": self.fetched_at,
+        }
+
+
+@dataclass(frozen=True)
+class CryptoPriceDailyRow:
+    date: str
+    symbol: str
+    name: str | None
+    price_usd: float | None
+    market_cap: float | None
+    volume_24h: float | None
+    change_24h: float | None
+    provider: str | None
+    fetched_at: str
+
+    def as_db_dict(self) -> dict[str, str | float | None]:
+        return {
+            "date": self.date,
+            "symbol": self.symbol,
+            "name": self.name,
+            "price_usd": self.price_usd,
+            "market_cap": self.market_cap,
+            "volume_24h": self.volume_24h,
+            "change_24h": self.change_24h,
+            "provider": self.provider,
+            "fetched_at": self.fetched_at,
         }

@@ -4,9 +4,12 @@ import com.example.financedashboard.api.ApiClient;
 import com.example.financedashboard.api.ApiException;
 import com.example.financedashboard.model.AnalysisSnapshot;
 import com.example.financedashboard.model.DashboardSummary;
+import com.example.financedashboard.model.FixedCharts;
 import com.example.financedashboard.model.Instrument;
+import com.example.financedashboard.model.MarketOverview;
 import com.example.financedashboard.model.PricePoint;
 import com.example.financedashboard.model.Quote;
+import com.example.financedashboard.model.TopStockPerformance;
 import com.fasterxml.jackson.core.type.TypeReference;
 
 import java.time.LocalDate;
@@ -23,6 +26,18 @@ public class MarketDataService {
 
     public DashboardSummary getDashboardSummary() throws ApiException {
         return apiClient.get("/api/dashboard/summary", Map.of(), DashboardSummary.class);
+    }
+
+    public MarketOverview getMarketOverview() throws ApiException {
+        return apiClient.get("/api/dashboard/market-overview", Map.of(), MarketOverview.class);
+    }
+
+    public FixedCharts getFixedCharts() throws ApiException {
+        return apiClient.get("/api/dashboard/fixed-charts", Map.of(), FixedCharts.class);
+    }
+
+    public List<TopStockPerformance> getTopStocks30d() throws ApiException {
+        return apiClient.getItems("/api/dashboard/top-stocks-30d", Map.of(), new TypeReference<>() {});
     }
 
     public List<Instrument> getInstruments(String assetType, Boolean active, String search) throws ApiException {
@@ -61,5 +76,61 @@ public class MarketDataService {
                 Map.of("base", base, "symbol", symbol, "start", start.toString(), "end", end.toString()),
                 new TypeReference<>() {}
         );
+    }
+
+    public List<PricePoint> getCryptoHistory(String symbol, LocalDate start, LocalDate end) throws ApiException {
+        return apiClient.getItems(
+                "/api/crypto/history",
+                Map.of("symbol", symbol, "start", start.toString(), "end", end.toString()),
+                new TypeReference<>() {}
+        );
+    }
+
+    public List<PricePoint> getMacroHistory(String indicatorCode, LocalDate start, LocalDate end) throws ApiException {
+        return apiClient.getItems(
+                "/api/macro/history",
+                Map.of("indicator_code", indicatorCode, "start", start.toString(), "end", end.toString()),
+                new TypeReference<>() {}
+        );
+    }
+
+    public List<PricePoint> getHistory(String assetType, String symbol, String base, LocalDate end, HistoryRange range) throws ApiException {
+        LocalDate start = range.startDate(end);
+        if ("FX".equalsIgnoreCase(assetType)) {
+            return getFxHistory(base == null || base.isBlank() ? "USD" : base, symbol, start, end);
+        }
+        if ("CRYPTO".equalsIgnoreCase(assetType)) {
+            return getCryptoHistory(symbol, start, end);
+        }
+        if ("MACRO".equalsIgnoreCase(assetType)) {
+            return getMacroHistory(symbol, start, end);
+        }
+        return getStockHistory(symbol, start, end);
+    }
+
+    public enum HistoryRange {
+        THIRTY_D("30D"),
+        NINETY_D("90D"),
+        ONE_Y("1Y"),
+        FOUR_Y("4Y");
+
+        private final String label;
+
+        HistoryRange(String label) {
+            this.label = label;
+        }
+
+        public String label() {
+            return label;
+        }
+
+        public LocalDate startDate(LocalDate end) {
+            return switch (this) {
+                case THIRTY_D -> end.minusDays(30);
+                case NINETY_D -> end.minusDays(90);
+                case ONE_Y -> end.minusYears(1);
+                case FOUR_Y -> end.minusYears(4);
+            };
+        }
     }
 }

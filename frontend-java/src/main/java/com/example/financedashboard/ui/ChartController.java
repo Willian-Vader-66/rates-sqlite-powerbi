@@ -19,9 +19,9 @@ public class ChartController {
     private final NumberAxis yAxis = new NumberAxis();
     private final LineChart<String, Number> chart = new LineChart<>(xAxis, yAxis);
     private final VBox view = new VBox(8);
+    private final Label title = new Label("Historical Price / Rate");
 
     public ChartController() {
-        Label title = new Label("Historical Price / Rate");
         title.getStyleClass().add("panel-title");
         chart.setAnimated(false);
         chart.setLegendVisible(false);
@@ -36,6 +36,10 @@ public class ChartController {
 
     public VBox getView() {
         return view;
+    }
+
+    public void setPeriodLabel(String periodLabel) {
+        title.setText("Historical Price / Rate - " + periodLabel);
     }
 
     public void showHistory(String symbol, List<PricePoint> points) {

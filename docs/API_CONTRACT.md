@@ -14,6 +14,24 @@ Start command:
 python -m fx_rates serve --host 127.0.0.1 --port 8000
 ```
 
+Prepare local demo data first when the dashboard is empty:
+
+```powershell
+cd C:\Projetos_Local\rates-sqlite-powerbi
+.\.venv\Scripts\Activate.ps1
+$env:MARKET_DATA_DEMO_MODE='true'
+python -m fx_rates dashboard prepare-demo --years 4 --demo
+python -m fx_rates serve --host 127.0.0.1 --port 8000
+```
+
+Readiness audit:
+
+```powershell
+python -m fx_rates dashboard audit
+```
+
+The audit reports SQLite path, instrument/quote/analysis counts by asset type, historical coverage by asset type and important symbols, missing quote/analysis counts, and duplicate instrument/quote keys.
+
 ## GET /health
 
 Returns service, database, and provider status.
@@ -33,11 +51,48 @@ Example response:
 }
 ```
 
+## GET /api/system/status
+
+Returns the SQLite file used by the running API plus readiness counts. Use this endpoint when the JavaFX dashboard connects but shows no data.
+
+Example response:
+
+```json
+{
+  "db_path": "C:\\Projetos_Local\\rates-sqlite-powerbi\\data\\fx.sqlite",
+  "db_exists": true,
+  "db_size_bytes": 13991936,
+  "total_instruments": 68,
+  "active_stocks": 32,
+  "active_currencies": 19,
+  "active_crypto": 10,
+  "active_macro": 7,
+  "latest_quote_count": 68,
+  "latest_analysis_count": 68,
+  "instruments_without_analysis": 0,
+  "instruments_without_quotes": 0,
+  "historical_row_count": 83250,
+  "date_min": "2022-05-04",
+  "date_max": "2026-05-03",
+  "is_empty": false,
+  "recommended_prepare_command": "python -m fx_rates dashboard prepare-demo --years 4 --demo"
+}
+```
+
+Empty database response includes:
+
+```json
+{
+  "is_empty": true,
+  "message": "No data loaded. Run prepare-demo."
+}
+```
+
 ## GET /api/instruments
 
 Query params:
 
-- `asset_type`: optional, `STOCK` or `FX`
+- `asset_type`: optional, `STOCK`, `FX`, `CRYPTO`, or `MACRO`
 - `active`: optional boolean
 - `search`: optional symbol/name text
 
@@ -131,7 +186,7 @@ GET /api/fx/history?base=USD&symbol=BRL&start=2026-01-01&end=2026-04-25
 Query params:
 
 - `symbols`: optional comma-separated list
-- `asset_type`: optional, `STOCK` or `FX`
+- `asset_type`: optional, `STOCK`, `FX`, `CRYPTO`, or `MACRO`
 
 Example:
 
@@ -172,7 +227,7 @@ Example response:
 Query params:
 
 - `symbols`: optional comma-separated list
-- `asset_type`: optional, `STOCK` or `FX`
+- `asset_type`: optional, `STOCK`, `FX`, `CRYPTO`, or `MACRO`
 
 Example:
 
@@ -195,6 +250,9 @@ Example response:
       "last_price": 189.2,
       "last_close": 189.2,
       "daily_return": 0.0069,
+      "change_30d": 0.0418,
+      "change_90d": 0.088,
+      "change_1y": 0.24,
       "sma_20": 184.5,
       "sma_50": 181.2,
       "volatility_20": 0.018,
@@ -214,25 +272,190 @@ Example response:
 
 ```json
 {
-  "total_instruments": 100,
-  "active_stocks": 100,
-  "active_currencies": 0,
-  "latest_quote_count": 4,
-  "latest_analysis_count": 4,
+  "total_instruments": 68,
+  "active_stocks": 32,
+  "active_currencies": 19,
+  "active_crypto": 10,
+  "active_macro": 7,
+  "latest_quote_count": 68,
+  "latest_analysis_count": 68,
+  "instruments_without_analysis": 0,
+  "instruments_without_quotes": 0,
   "last_successful_ingest_run": {
     "run_id": 12,
     "started_at": "2026-05-01T12:00:00+00:00",
     "finished_at": "2026-05-01T12:00:10+00:00",
-    "mode": "stocks_backfill",
-    "base": "STK",
-    "symbols": "AAPL,MSFT",
-    "start": "2026-01-01",
-    "end": "2026-04-25",
-    "row_count": 160,
+    "mode": "dashboard_prepare_demo",
+    "base": "DEM",
+    "symbols": "ALL",
+    "start": "2022-05-02",
+    "end": "2026-05-01",
+    "row_count": 83000,
     "status": "OK",
     "error": null
   },
-  "failed_runs_count": 0
+  "failed_runs_count": 0,
+  "message": null
+}
+```
+
+## GET /api/crypto/history
+
+Query params:
+
+- `symbol`: required, for example `BTC`
+- `start`: optional `YYYY-MM-DD`
+- `end`: optional `YYYY-MM-DD`
+
+Example:
+
+```text
+GET /api/crypto/history?symbol=BTC&start=2026-01-01&end=2026-04-25
+```
+
+Example response:
+
+```json
+{
+  "symbol": "BTC",
+  "count": 1,
+  "items": [
+    {
+      "date": "2026-01-02",
+      "symbol": "BTC",
+      "name": "Bitcoin",
+      "price_usd": 65000.0,
+      "market_cap": 1280000000000.0,
+      "volume_24h": 28000000000.0,
+      "change_24h": 1.2,
+      "provider": "mock_crypto",
+      "fetched_at": "2026-05-01T12:00:00+00:00"
+    }
+  ]
+}
+```
+
+## GET /api/macro/history
+
+Query params:
+
+- `indicator_code`: required, for example `SELIC_DAILY`
+- `start`: optional `YYYY-MM-DD`
+- `end`: optional `YYYY-MM-DD`
+
+Example:
+
+```text
+GET /api/macro/history?indicator_code=SELIC_DAILY&start=2026-01-01&end=2026-04-25
+```
+
+## GET /api/dashboard/market-overview
+
+Returns overview cards and recent notable signals.
+
+Example response:
+
+```json
+{
+  "generated_at": "2026-05-01T12:00:00+00:00",
+  "cards": [
+    {"label": "USD/BRL", "value": 5.0, "change": -0.25, "unit": null, "status": "down"},
+    {"label": "USD/EUR", "value": 0.92, "change": 0.1, "unit": null, "status": "up"},
+    {"label": "BTC/USD", "value": 65000.0, "change": 2.1, "unit": "USD", "status": "up"},
+    {"label": "Selic", "value": 0.04, "change": 0.0, "unit": "% a.d.", "status": "neutral"}
+  ],
+  "signals": [
+    {"symbol": "NVDA", "asset_type": "STOCK", "trend": "UP", "signal": "BREAKOUT"}
+  ],
+  "message": null
+}
+```
+
+## GET /api/dashboard/fixed-charts
+
+Returns curated 30-day chart groups for the Overview page. The optional `days` query param defaults to `30`.
+
+Example response:
+
+```json
+{
+  "fx": [
+    {
+      "id": "usd_brl_30d",
+      "title": "USD/BRL - Last 30 Days",
+      "asset_type": "FX",
+      "base": "USD",
+      "symbol": "BRL",
+      "points": [{"date": "2026-01-01", "value": 5.0}],
+      "message": null
+    },
+    {
+      "id": "usd_eur_30d",
+      "title": "USD/EUR - Last 30 Days",
+      "asset_type": "FX",
+      "base": "USD",
+      "symbol": "EUR",
+      "points": [{"date": "2026-01-01", "value": 0.92}],
+      "message": null
+    }
+  ],
+  "crypto": [
+    {
+      "id": "btc_usd_30d",
+      "title": "Bitcoin - Last 30 Days",
+      "asset_type": "CRYPTO",
+      "symbol": "BTC",
+      "points": [{"date": "2026-01-01", "value": 65000.0}],
+      "message": null
+    }
+  ],
+  "macro": [
+    {
+      "id": "selic_30d",
+      "title": "Selic - Last 30 Days",
+      "asset_type": "MACRO",
+      "symbol": "SELIC_DAILY",
+      "points": [{"date": "2026-01-01", "value": 0.04}],
+      "message": null
+    }
+  ]
+}
+```
+
+When a fixed chart is not populated, the chart object still returns `points: []` plus a user-facing `message`, for example:
+
+```json
+{
+  "points": [],
+  "message": "No data loaded. Run: python -m fx_rates dashboard prepare-demo --years 4 --demo"
+}
+```
+
+## GET /api/dashboard/top-stocks-30d
+
+Returns the curated top company panel. Optional params:
+
+- `symbols`: comma-separated override list
+- `days`: defaults to `30`
+
+Example:
+
+```text
+GET /api/dashboard/top-stocks-30d?symbols=AAPL,MSFT,NVDA
+```
+
+Example item:
+
+```json
+{
+  "symbol": "AAPL",
+  "name": "Apple Inc",
+  "latest_price": 179.4,
+  "start_price": 172.2,
+  "change_30d": 4.18,
+  "trend": "UP",
+  "signal": "BREAKOUT",
+  "points": [{"date": "2026-01-01", "value": 172.2}]
 }
 ```
 

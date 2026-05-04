@@ -1,0 +1,11 @@
+symbol,name,exchange,currency,sector,is_active,priority
+AAPL,Apple Inc,NASDAQ,USD,Technology,1,1
+MSFT,Microsoft Corp,NASDAQ,USD,Technology,1,2
+NVDA,NVIDIA Corp,NASDAQ,USD,Technology,1,3
+GOOGL,Alphabet Inc Class A,NASDAQ,USD,Communication Services,1,4
+AMZN,Amazon.com Inc,NASDAQ,USD,Consumer Discretionary,1,5
+META,Meta Platforms Inc,NASDAQ,USD,Communication Services,1,6
+TSLA,Tesla Inc,NASDAQ,USD,Consumer Discretionary,1,7
+JPM,JPMorgan Chase and Co,NYSE,USD,Financials,1,8
+V,Visa Inc,NYSE,USD,Financials,1,9
+MA,Mastercard Inc,NYSE,USD,Financials,1,10

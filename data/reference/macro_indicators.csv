@@ -1,0 +1,8 @@
+indicator_code,indicator_name,source,provider_code,unit,is_active,priority
+SELIC_DAILY,Selic Daily Rate,Banco Central do Brasil SGS,11,% a.d.,1,1
+SELIC_MONTHLY,Selic Monthly Accumulated,Banco Central do Brasil SGS,4390,% a.m.,1,2
+SELIC_ANNUALIZED_MONTHLY,Selic Annualized Monthly Rate,Banco Central do Brasil SGS,4189,% a.a.,1,3
+CDI_DAILY,CDI Daily Rate,Banco Central do Brasil SGS,12,% a.d.,1,4
+IPCA_MONTHLY,IPCA Monthly Inflation,Banco Central do Brasil SGS,433,% a.m.,1,5
+FED_FUNDS_DAILY,Fed Funds Effective Rate,Federal Reserve mock,FEDFUNDS,% a.a.,0,6
+US_CPI_MONTHLY,US CPI Monthly Index,Federal Reserve mock,CPIAUCSL,index,0,7

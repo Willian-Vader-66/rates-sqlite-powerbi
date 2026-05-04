@@ -18,6 +18,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class MarketDataServiceTest {
     @Test
     void fourYearRangeCalculatesStartDate() {
+        assertEquals(LocalDate.of(2026, 2, 2), HistoryRange.NINETY_D.startDate(LocalDate.of(2026, 5, 3)));
+        assertEquals(LocalDate.of(2025, 11, 3), HistoryRange.SIX_M.startDate(LocalDate.of(2026, 5, 3)));
         assertEquals(LocalDate.of(2022, 5, 3), HistoryRange.FOUR_Y.startDate(LocalDate.of(2026, 5, 3)));
     }
 

@@ -196,17 +196,27 @@ def load_macro_reference(path: str) -> list[MacroIndicatorConfig]:
 
 def _mock_indicator_value(indicator_code: str, index: int) -> float:
     normalized = indicator_code.strip().upper()
-    if "DAILY" in normalized:
-        base = 0.040
-        amplitude = 0.003
+    profiles = {
+        "SELIC_DAILY": (0.040, 0.0008),
+        "CDI_DAILY": (0.039, 0.0007),
+        "FED_FUNDS_DAILY": (5.25, 0.035),
+        "SELIC_MONTHLY": (0.88, 0.018),
+        "IPCA_MONTHLY": (0.36, 0.055),
+        "SELIC_ANNUALIZED_MONTHLY": (10.50, 0.08),
+        "US_CPI_MONTHLY": (315.0, 0.9),
+    }
+    if normalized in profiles:
+        base, amplitude = profiles[normalized]
+    elif "DAILY" in normalized:
+        base, amplitude = 0.040, 0.0008
     elif "MONTHLY" in normalized and "ANNUALIZED" not in normalized:
-        base = 0.85
-        amplitude = 0.035
+        base, amplitude = 0.65, 0.04
     else:
-        base = 10.50
-        amplitude = 0.18
+        base, amplitude = 10.50, 0.08
     phase = _stable_unit(normalized, 0) * math.pi
-    return round(base + math.sin(index / 8.0 + phase) * amplitude, 4)
+    slow_wave = math.sin(index / 35.0 + phase) * amplitude
+    small_noise = (_stable_unit(normalized, index) - 0.5) * amplitude * 0.08
+    return round(base + slow_wave + small_noise, 4)
 
 
 def _stable_unit(value: str, salt: int) -> float:

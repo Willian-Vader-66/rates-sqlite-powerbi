@@ -9,6 +9,7 @@ import com.example.financedashboard.model.Instrument;
 import com.example.financedashboard.model.MarketOverview;
 import com.example.financedashboard.model.PricePoint;
 import com.example.financedashboard.model.Quote;
+import com.example.financedashboard.model.SystemStatus;
 import com.example.financedashboard.model.TopStockPerformance;
 import com.fasterxml.jackson.core.type.TypeReference;
 
@@ -28,16 +29,36 @@ public class MarketDataService {
         return apiClient.get("/api/dashboard/summary", Map.of(), DashboardSummary.class);
     }
 
+    public SystemStatus getSystemStatus() throws ApiException {
+        return apiClient.get("/api/system/status", Map.of(), SystemStatus.class);
+    }
+
     public MarketOverview getMarketOverview() throws ApiException {
         return apiClient.get("/api/dashboard/market-overview", Map.of(), MarketOverview.class);
+    }
+
+    public MarketOverview getMarketOverview(HistoryRange range) throws ApiException {
+        return apiClient.get("/api/dashboard/market-overview", Map.of("period", safeRange(range).label()), MarketOverview.class);
     }
 
     public FixedCharts getFixedCharts() throws ApiException {
         return apiClient.get("/api/dashboard/fixed-charts", Map.of(), FixedCharts.class);
     }
 
+    public FixedCharts getFixedCharts(HistoryRange range) throws ApiException {
+        return apiClient.get("/api/dashboard/fixed-charts", Map.of("period", safeRange(range).label()), FixedCharts.class);
+    }
+
     public List<TopStockPerformance> getTopStocks30d() throws ApiException {
         return apiClient.getItems("/api/dashboard/top-stocks-30d", Map.of(), new TypeReference<>() {});
+    }
+
+    public List<TopStockPerformance> getTopStocks(HistoryRange range) throws ApiException {
+        return apiClient.getItems(
+                "/api/dashboard/top-stocks-30d",
+                Map.of("days", Integer.toString(safeRange(range).days())),
+                new TypeReference<>() {}
+        );
     }
 
     public List<Instrument> getInstruments(String assetType, Boolean active, String search) throws ApiException {
@@ -111,6 +132,7 @@ public class MarketDataService {
     public enum HistoryRange {
         THIRTY_D("30D"),
         NINETY_D("90D"),
+        SIX_M("6M"),
         ONE_Y("1Y"),
         FOUR_Y("4Y");
 
@@ -128,9 +150,24 @@ public class MarketDataService {
             return switch (this) {
                 case THIRTY_D -> end.minusDays(30);
                 case NINETY_D -> end.minusDays(90);
+                case SIX_M -> end.minusMonths(6);
                 case ONE_Y -> end.minusYears(1);
                 case FOUR_Y -> end.minusYears(4);
             };
         }
+
+        public int days() {
+            return switch (this) {
+                case THIRTY_D -> 30;
+                case NINETY_D -> 90;
+                case SIX_M -> 183;
+                case ONE_Y -> 365;
+                case FOUR_Y -> 1460;
+            };
+        }
+    }
+
+    private static HistoryRange safeRange(HistoryRange range) {
+        return range == null ? HistoryRange.NINETY_D : range;
     }
 }

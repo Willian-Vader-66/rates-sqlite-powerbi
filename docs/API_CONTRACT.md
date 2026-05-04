@@ -32,6 +32,17 @@ python -m fx_rates dashboard audit
 
 The audit reports SQLite path, instrument/quote/analysis counts by asset type, historical coverage by asset type and important symbols, missing quote/analysis counts, and duplicate instrument/quote keys.
 
+## JavaFX Frontend Endpoint Usage
+
+The JavaFX app remains HTTP-only and chooses history endpoints by asset type:
+
+- `STOCK`: `GET /api/stocks/history?symbol=AAPL&start=YYYY-MM-DD&end=YYYY-MM-DD`
+- `FX`: `GET /api/fx/history?base=USD&symbol=BRL&start=YYYY-MM-DD&end=YYYY-MM-DD`
+- `CRYPTO`: `GET /api/crypto/history?symbol=BTC&start=YYYY-MM-DD&end=YYYY-MM-DD`
+- `MACRO`: `GET /api/macro/history?indicator_code=SELIC_DAILY&start=YYYY-MM-DD&end=YYYY-MM-DD`
+
+Supported frontend ranges are `30D`, `90D`, `6M`, `1Y`, and `4Y`. The frontend only requests history for the selected instrument and does not load all symbols for long ranges. Overview charts default to `90D`.
+
 ## GET /health
 
 Returns service, database, and provider status.
@@ -373,7 +384,27 @@ Example response:
 
 ## GET /api/dashboard/fixed-charts
 
-Returns curated 30-day chart groups for the Overview page. The optional `days` query param defaults to `30`.
+Returns curated chart groups for the Overview page. The default period is `90D`.
+
+Optional params:
+
+- `period`: one of `30D`, `90D`, `6M`, `1Y`, `4Y`
+- `days`: legacy numeric override
+
+Chart and instrument-like responses expose display metadata:
+
+- `display_name`
+- `base_currency`
+- `quote_currency`
+- `display_pair`
+- `display_unit`
+- `value_format`
+- `chart_title`
+- `chart_subtitle`
+- `axis_label`
+- `tooltip_label`
+
+Examples: AAPL uses `AAPL/USD` with `USD`; FX uses the database convention `base=USD`, so BRL is displayed as `USD/BRL`; crypto uses `BTC/USD`; macro indicators expose explicit units such as `% a.d.`, `% a.m.`, `% a.a.`, or `index`.
 
 Example response:
 
@@ -386,6 +417,10 @@ Example response:
       "asset_type": "FX",
       "base": "USD",
       "symbol": "BRL",
+      "display_pair": "USD/BRL",
+      "display_unit": "BRL per 1 USD",
+      "value_format": "fx_rate",
+      "axis_label": "BRL per USD",
       "points": [{"date": "2026-01-01", "value": 5.0}],
       "message": null
     },
@@ -405,6 +440,9 @@ Example response:
       "title": "Bitcoin - Last 30 Days",
       "asset_type": "CRYPTO",
       "symbol": "BTC",
+      "display_pair": "BTC/USD",
+      "display_unit": "USD",
+      "value_format": "currency_usd",
       "points": [{"date": "2026-01-01", "value": 65000.0}],
       "message": null
     }
@@ -415,12 +453,51 @@ Example response:
       "title": "Selic - Last 30 Days",
       "asset_type": "MACRO",
       "symbol": "SELIC_DAILY",
+      "display_unit": "% a.d.",
+      "value_format": "percent",
       "points": [{"date": "2026-01-01", "value": 0.04}],
       "message": null
     }
   ]
 }
 ```
+
+History endpoints (`/api/stocks/history`, `/api/fx/history`, `/api/crypto/history`, `/api/macro/history`) also return `start_date`, `end_date`, `point_count`, `period`, and the same display metadata at the response root. Items include compatible metadata so JavaFX can render units and tooltips even when it reads only the `items` array.
+
+## GET /api/dashboard/overview
+
+Aggregated Overview payload for product dashboards.
+
+```text
+GET /api/dashboard/overview?period=90D
+```
+
+Returns summary, market cards, fixed charts, technical highlights, performance ranking, and data quality. Technical labels are deterministic display signals only, not financial advice.
+
+## GET /api/dashboard/technical-highlights
+
+```text
+GET /api/dashboard/technical-highlights?period=90D
+```
+
+Returns grouped technical watch cards:
+
+- `positive_momentum`
+- `negative_momentum`
+- `breakout_watch`
+- `drawdown_risk`
+- `stable`
+- `volatile`
+
+Items include `technical_label`, `technical_score`, `technical_tone`, and `technical_summary`.
+
+## GET /api/dashboard/performance-ranking
+
+```text
+GET /api/dashboard/performance-ranking?period=90D&asset_type=ALL
+```
+
+Returns selected-period `top`, `bottom`, and full ranked `items`. `asset_type` can be `ALL`, `STOCK`, `FX`, `CRYPTO`, or `MACRO`.
 
 When a fixed chart is not populated, the chart object still returns `points: []` plus a user-facing `message`, for example:
 

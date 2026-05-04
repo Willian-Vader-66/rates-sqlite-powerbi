@@ -136,6 +136,13 @@ cd C:\Projetos_Local\rates-sqlite-powerbi\frontend-java
 mvn javafx:run
 ```
 
+Validate the API:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/api/system/status
+Invoke-RestMethod http://127.0.0.1:8000/api/dashboard/summary
+```
+
 The default prepare command loads the first 32 active stocks from `data/reference/top100_stocks.csv`, all active currencies from `data/reference/currencies.csv` as USD-based FX series, BTC/ETH and the other curated crypto assets, and macro indicators including Selic. Use `--stock-limit 100` when you want the full stock reference list.
 
 Audit the prepared data:
@@ -259,6 +266,7 @@ python -m fx_rates serve --host 127.0.0.1 --port 8000
 Useful endpoints:
 
 - `GET /health`
+- `GET /api/system/status`
 - `GET /api/instruments`
 - `GET /api/stocks/history?symbol=AAPL&start=2026-01-01&end=2026-04-25`
 - `GET /api/fx/history?base=USD&symbol=BRL&start=2026-01-01&end=2026-04-25`
@@ -272,6 +280,52 @@ Useful endpoints:
 - `GET /api/macro/history?indicator_code=SELIC_DAILY&start=2026-01-01&end=2026-04-25`
 
 See `docs/API_CONTRACT.md` for JSON examples.
+
+### JavaFX Product Dashboard
+
+The JavaFX app is a corporate dark-mode desktop dashboard that consumes the FastAPI backend over HTTP only. It includes populated Overview, Markets, Stocks, FX & Crypto, Macro, Watchlist, and Settings pages.
+
+Current productized UI features:
+
+- populated summary and market overview cards after `dashboard prepare-demo`
+- dedicated cross-asset Markets, Stocks, FX & Crypto, and Macro views
+- fixed 30-day overview mini charts
+- Top 10 Companies table with financial formatting
+- Watchlist filters and selected instrument details
+- interactive charts with 30D, 90D, 6M, 1Y, and 4Y ranges
+- hover tooltip, crosshair, last-value marker, loading/empty/error states
+- Settings page showing `/api/system/status` diagnostics
+
+Frontend productization docs:
+
+- `docs/FRONTEND_PRODUCTIZATION_AUDIT.md`
+- `docs/FRONTEND_PRODUCTIZATION_PLAN.md`
+- `docs/FRONTEND_VISUAL_QA_CHECKLIST.md`
+
+### Local Visual Test Runner
+
+From the repository root, `run_visual_test.ps1` can prepare data, start the FastAPI backend, validate `/api/system/status`, and open JavaFX:
+
+```powershell
+.\run_visual_test.ps1
+.\run_visual_test.ps1 -PrepareDemo
+.\run_visual_test.ps1 -PrepareDemo -SkipTests
+.\run_visual_test.ps1 -NoFrontend
+.\run_visual_test.ps1 -KeepBackendAlive
+```
+
+If Windows blocks script execution, use:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run_visual_test.ps1 -PrepareDemo
+```
+
+Visual test logs are written to:
+
+- `logs/backend-visual-test.log`
+- `logs/frontend-visual-test.log`
+
+See `docs/VISUAL_TEST_RUNNER.md` for parameters and empty-database troubleshooting.
 
 ### Common Flags
 
@@ -438,6 +492,20 @@ At the end of the verified demo run, the local database contained:
 - `ingest_runs`: `9` rows
 
 ## Troubleshooting
+
+### Data & Display Consistency
+
+Finance Monitor uses SQLite as the local source of truth. Demo data is deterministic/local and is designed to be visually plausible for portfolio validation, but it is synthetic and is not financial advice.
+
+Prepare and audit the dashboard before visual QA:
+
+```powershell
+python -m fx_rates dashboard prepare-demo --years 4 --demo
+python -m fx_rates dashboard audit
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run_visual_test.ps1 -PrepareDemo -SkipTests
+```
+
+The audit checks quote/history ratios, suspicious stock prices, non-positive FX/crypto values, missing macro units, duplicate instruments/quotes, and expected 4-year coverage. Dashboard API responses include display metadata such as `display_pair`, `display_unit`, `value_format`, `chart_title`, `axis_label`, and `tooltip_label` so charts can explicitly show USD, FX pair direction, crypto quote currency, and macro units.
 
 ### Timeout or connectivity issues
 

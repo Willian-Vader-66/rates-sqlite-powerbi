@@ -50,7 +50,17 @@ class ApiClientTest {
         DashboardSummary summary = client.getObjectMapper().treeToValue(summaryJson, DashboardSummary.class);
 
         JsonNode instrumentJson = client.getObjectMapper().readTree("""
-                {"instrument_id": 1, "symbol": "AAPL", "name": "Apple Inc", "asset_type": "STOCK", "is_active": 1}
+                {
+                  "instrument_id": 1,
+                  "symbol": "AAPL",
+                  "name": "Apple Inc",
+                  "asset_type": "STOCK",
+                  "is_active": 1,
+                  "display_pair": "AAPL/USD",
+                  "display_unit": "USD",
+                  "value_format": "currency_usd",
+                  "chart_title": "Apple Inc (AAPL)"
+                }
                 """);
         Instrument instrument = client.getObjectMapper().treeToValue(instrumentJson, Instrument.class);
 
@@ -59,6 +69,9 @@ class ApiClientTest {
         assertEquals(2, summary.instrumentsWithoutQuotes());
         assertEquals("stocks_backfill", summary.lastSuccessfulIngestRun().mode());
         assertEquals("AAPL", instrument.symbol());
+        assertEquals("AAPL/USD", instrument.displayPair());
+        assertEquals("USD", instrument.displayUnit());
+        assertEquals("currency_usd", instrument.valueFormat());
         assertTrue(instrument.active());
     }
 
@@ -74,6 +87,10 @@ class ApiClientTest {
                       "asset_type": "FX",
                       "base": "USD",
                       "symbol": "EUR",
+                      "display_pair": "USD/EUR",
+                      "display_unit": "EUR per 1 USD",
+                      "value_format": "fx_rate",
+                      "chart_title": "USD/EUR Exchange Rate",
                       "points": [],
                       "message": "No data loaded. Run: python -m fx_rates dashboard prepare-demo --years 4 --demo"
                     }
@@ -86,6 +103,8 @@ class ApiClientTest {
         FixedCharts fixedCharts = client.getObjectMapper().treeToValue(fixedChartsJson, FixedCharts.class);
 
         assertEquals("usd_eur_30d", fixedCharts.fx().get(0).id());
+        assertEquals("USD/EUR", fixedCharts.fx().get(0).displayPair());
+        assertEquals("fx_rate", fixedCharts.fx().get(0).valueFormat());
         assertTrue(fixedCharts.fx().get(0).message().startsWith("No data loaded."));
     }
 

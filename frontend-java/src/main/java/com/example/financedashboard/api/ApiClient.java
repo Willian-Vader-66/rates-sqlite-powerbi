@@ -48,7 +48,9 @@ public class ApiClient {
                 .GET()
                 .build();
         try {
-            System.out.println("API GET " + uri);
+            if (Boolean.getBoolean("finance.api.debug")) {
+                System.out.println("API GET " + uri);
+            }
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 throw new ApiException(response.statusCode(), "Backend returned HTTP " + response.statusCode() + " for " + uri);

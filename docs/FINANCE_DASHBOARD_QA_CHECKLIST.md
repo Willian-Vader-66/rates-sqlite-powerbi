@@ -117,6 +117,10 @@ mvn javafx:run
 - backend offline banner is friendly when API is stopped
 - refresh does not flicker or clear previous data
 - Overview tab shows summary metrics
+- Markets tab shows cross-asset cards, market snapshot, and positive/negative rankings
+- Stocks tab shows stock cards, equity table, and stock momentum charts
+- FX & Crypto tab shows FX/crypto cards, table, and key 30-day charts
+- Macro tab shows macro cards, indicator table, and macro chart/insufficient-history state
 - fixed chart cards render or show clear empty states
 - empty chart cards show `No data loaded. Run: python -m fx_rates dashboard prepare-demo --years 4 --demo`
 - top stocks panel renders or shows a clear empty state
@@ -124,11 +128,17 @@ mvn javafx:run
 - selecting a stock loads the historical chart
 - selecting crypto loads crypto history when present
 - selecting macro loads macro history when present
-- selected instrument chart offers 30D, 90D, 1Y, and 4Y
+- selected instrument chart offers 30D, 90D, 6M, 1Y, and 4Y, with 1Y visible by default
 - 4Y selected history shows coverage around 2022-05 to 2026-05
 - selecting the same instrument repeatedly does not spam duplicate history calls
 - most rows show useful trend/signal rather than raw UNKNOWN
+- Watchlist shows display pair/unit, for example AAPL/USD, USD/BRL, BTC/USD, and macro `% a.a.`/`% a.m.`/`% a.d.`
+- selected chart title/subtitle/tooltip make currency or unit explicit
+- AAPL and other stocks show plausible USD prices, not values in the millions
+- `python -m fx_rates dashboard audit` reports `Suspicious values: 0` and `Alerts: none`
 - chart gridlines are subtle and readable
+- ComboBox dropdown text is readable against the dark theme
+- header shows Finance Monitor, API status, last refresh, Refresh, and Pause Auto/Resume Auto
 
 ## Screenshot checklist
 

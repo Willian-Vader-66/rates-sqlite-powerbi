@@ -23,6 +23,20 @@ public record AnalysisSnapshot(
         @JsonProperty("max_30d") Double max30d,
         String trend,
         String signal,
-        String notes
+        String notes,
+        @JsonProperty("display_name") String displayName,
+        @JsonProperty("base_currency") String baseCurrency,
+        @JsonProperty("quote_currency") String quoteCurrency,
+        @JsonProperty("display_pair") String displayPair,
+        @JsonProperty("display_unit") String displayUnit,
+        @JsonProperty("value_format") String valueFormat,
+        @JsonProperty("chart_title") String chartTitle,
+        @JsonProperty("chart_subtitle") String chartSubtitle,
+        @JsonProperty("axis_label") String axisLabel,
+        @JsonProperty("tooltip_label") String tooltipLabel,
+        @JsonProperty("technical_label") String technicalLabel,
+        @JsonProperty("technical_score") Integer technicalScore,
+        @JsonProperty("technical_tone") String technicalTone,
+        @JsonProperty("technical_summary") String technicalSummary
 ) {
 }

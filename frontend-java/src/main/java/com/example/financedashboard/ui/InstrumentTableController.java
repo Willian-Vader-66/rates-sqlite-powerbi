@@ -14,6 +14,7 @@ import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
+import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextField;
@@ -145,12 +146,14 @@ public class InstrumentTableController {
 
     private void configureTable() {
         table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
-        table.getColumns().add(column("Symbol", row -> row.symbol()));
-        table.getColumns().add(column("Name", row -> row.name()));
+        table.setFixedCellSize(34);
+        table.getColumns().add(styledColumn("Symbol", row -> row.symbol(), "symbol-cell"));
+        table.getColumns().add(styledColumn("Name", row -> row.name(), "name-cell"));
         table.getColumns().add(column("Asset", row -> row.assetType()));
+        table.getColumns().add(column("Display / Unit", row -> row.displayPairOrUnit()));
         table.getColumns().add(column("Exchange", row -> row.exchange()));
-        table.getColumns().add(column("Latest Price", row -> FormatUtils.price(row.price())));
-        table.getColumns().add(column("% Change", row -> FormatUtils.percent(row.percentChange())));
+        table.getColumns().add(styledColumn("Latest Price", WatchRow::formattedPrice, "numeric-cell"));
+        table.getColumns().add(styledColumn("% Change", row -> FormatUtils.percent(row.percentChange()), "numeric-cell", "movement-cell"));
         table.getColumns().add(column("Trend", row -> row.trend()));
         table.getColumns().add(column("Signal", row -> row.signal()));
         table.getColumns().add(column("Last Update", row -> DateUtils.displayDateTime(row.lastUpdate())));
@@ -164,6 +167,34 @@ public class InstrumentTableController {
     private TableColumn<WatchRow, String> column(String title, java.util.function.Function<WatchRow, String> extractor) {
         TableColumn<WatchRow, String> column = new TableColumn<>(title);
         column.setCellValueFactory(data -> new SimpleStringProperty(FormatUtils.text(extractor.apply(data.getValue()))));
+        return column;
+    }
+
+    private TableColumn<WatchRow, String> styledColumn(
+            String title,
+            java.util.function.Function<WatchRow, String> extractor,
+            String... styleClasses
+    ) {
+        TableColumn<WatchRow, String> column = column(title, extractor);
+        column.setCellFactory(col -> new TableCell<>() {
+            @Override
+            protected void updateItem(String value, boolean empty) {
+                super.updateItem(value, empty);
+                getStyleClass().removeAll("numeric-cell", "movement-cell", "positive", "negative", "symbol-cell", "name-cell");
+                if (empty || value == null) {
+                    setText(null);
+                    return;
+                }
+                setText(value);
+                getStyleClass().addAll(styleClasses);
+                if (java.util.Arrays.asList(styleClasses).contains("movement-cell")) {
+                    WatchRow row = getTableRow() == null ? null : getTableRow().getItem();
+                    if (row != null && row.percentChange() != null) {
+                        getStyleClass().add(row.percentChange() < 0 ? "negative" : "positive");
+                    }
+                }
+            }
+        });
         return column;
     }
 
@@ -309,6 +340,44 @@ public class InstrumentTableController {
             return instrument.sector();
         }
 
+        public String displayPair() {
+            if (quote != null && quote.displayPair() != null && !quote.displayPair().isBlank()) {
+                return quote.displayPair();
+            }
+            if (analysis != null && analysis.displayPair() != null && !analysis.displayPair().isBlank()) {
+                return analysis.displayPair();
+            }
+            return instrument.displayPair();
+        }
+
+        public String displayUnit() {
+            if (quote != null && quote.displayUnit() != null && !quote.displayUnit().isBlank()) {
+                return quote.displayUnit();
+            }
+            if (analysis != null && analysis.displayUnit() != null && !analysis.displayUnit().isBlank()) {
+                return analysis.displayUnit();
+            }
+            return instrument.displayUnit();
+        }
+
+        public String valueFormat() {
+            if (quote != null && quote.valueFormat() != null && !quote.valueFormat().isBlank()) {
+                return quote.valueFormat();
+            }
+            if (analysis != null && analysis.valueFormat() != null && !analysis.valueFormat().isBlank()) {
+                return analysis.valueFormat();
+            }
+            return instrument.valueFormat();
+        }
+
+        public String displayPairOrUnit() {
+            String pair = displayPair();
+            if (pair != null && !pair.isBlank()) {
+                return pair;
+            }
+            return FormatUtils.text(displayUnit());
+        }
+
         public boolean active() {
             return instrument.active();
         }
@@ -318,6 +387,10 @@ public class InstrumentTableController {
                 return quote.price();
             }
             return analysis == null ? null : analysis.lastPrice();
+        }
+
+        public String formattedPrice() {
+            return FormatUtils.valueWithUnit(price(), valueFormat(), displayUnit());
         }
 
         public Double percentChange() {

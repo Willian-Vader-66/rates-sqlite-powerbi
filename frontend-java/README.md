@@ -83,10 +83,14 @@ The environment variable `FINANCE_API_BASE_URL` takes precedence over the proper
 ## Features
 
 - Overview tab with summary cards, market overview cards, fixed 30-day mini charts, and top company performance.
+- Navigation structure for Overview, Markets, Stocks, FX & Crypto, Macro, Watchlist, and Settings.
 - Dashboard summary cards for total instruments, active stocks, active FX, active crypto, macro indicators, latest quotes, failed runs, and last successful ingest.
 - Watchlist table combining instruments, latest quotes, and latest analysis snapshots.
 - Filters for search, asset type, signal, trend, exchange, sector, and active instruments.
-- Instrument detail panel with latest quote, analysis snapshot, and historical line chart.
+- Instrument detail panel with latest quote, analysis snapshot, data coverage, and an interactive historical chart.
+- Chart ranges: 30D, 90D, 6M, 1Y, and 4Y.
+- Hover tooltip, nearest-point crosshair, last-value marker, and client-side downsampling for long ranges.
+- Settings page showing API base URL, timeout, refresh interval, DB path, DB size, historical rows, and date coverage from `/api/system/status`.
 - Background polling every `refresh.interval.seconds`, defaulting to 30 seconds.
 - HTTP requests use `http.timeout.seconds`, defaulting to 30 seconds.
 - Manual refresh and pause/resume controls are available in the dashboard.
@@ -124,17 +128,14 @@ CORS is not relevant for this JavaFX desktop app because it uses Java's built-in
 
 ### Empty dashboard
 
-The backend may be running with an empty SQLite database. Seed data in demo mode:
+The backend may be running with an empty SQLite database or a different DB path. Seed data in demo mode and compare `/api/system/status` with `dashboard audit`:
 
 ```powershell
 $env:MARKET_DATA_DEMO_MODE='true'
-python -m fx_rates instruments import --file data/reference/sample_stocks.csv
-python -m fx_rates stocks backfill --start 2026-01-01 --end 2026-01-10 --watchlist data/reference/sample_stocks.csv
-python -m fx_rates crypto backfill --start 2026-01-01 --end 2026-01-10 --symbols BTC,ETH
-python -m fx_rates macro backfill --start 2026-01-01 --end 2026-01-10
-python -m fx_rates crypto quotes --symbols BTC,ETH
-python -m fx_rates quotes poll --symbols AAPL,MSFT,NVDA --interval-seconds 5 --duration-minutes 0
-python -m fx_rates analyze now --symbols AAPL,MSFT,NVDA
+python -m fx_rates dashboard prepare-demo --years 4 --demo
+python -m fx_rates dashboard audit
+Invoke-RestMethod http://127.0.0.1:8000/api/system/status
+Invoke-RestMethod http://127.0.0.1:8000/api/dashboard/summary
 ```
 
 ## Packaging Notes

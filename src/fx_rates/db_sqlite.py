@@ -14,6 +14,7 @@ from .models import (
     MarketQuoteRow,
     StockPriceDailyRow,
 )
+from .display_metadata import apply_display_metadata, build_display_metadata
 from .utils import normalize_base, normalize_symbol_list, utc_now_iso
 
 FX_RATES_TABLE_SQL = """
@@ -432,7 +433,72 @@ def list_instruments(
             """,
             params,
         ).fetchall()
-    return [dict(row) for row in rows]
+    return _with_display_metadata(db_path, [dict(row) for row in rows])
+
+
+def _with_display_metadata(db_path: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not rows:
+        return rows
+
+    symbols = {
+        str(row.get("symbol") or row.get("indicator_code") or "").strip().upper()
+        for row in rows
+        if row.get("symbol") or row.get("indicator_code")
+    }
+    instrument_meta: dict[tuple[str, str], dict[str, Any]] = {}
+    macro_units: dict[str, str] = {}
+    if symbols:
+        placeholders = ",".join("?" for _ in symbols)
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            for row in conn.execute(
+                f"""
+                SELECT asset_type, symbol, name, exchange, currency, sector
+                FROM instruments
+                WHERE symbol IN ({placeholders})
+                ORDER BY is_active DESC, priority ASC
+                """,
+                sorted(symbols),
+            ).fetchall():
+                key = (str(row["asset_type"]).upper(), str(row["symbol"]).upper())
+                instrument_meta.setdefault(key, dict(row))
+            for row in conn.execute(
+                f"""
+                SELECT indicator_code, unit
+                FROM macro_indicators_daily
+                WHERE indicator_code IN ({placeholders}) AND unit IS NOT NULL AND unit <> ''
+                GROUP BY indicator_code, unit
+                """,
+                sorted(symbols),
+            ).fetchall():
+                macro_units[str(row["indicator_code"]).upper()] = str(row["unit"])
+
+    enriched: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        symbol = str(item.get("symbol") or item.get("indicator_code") or "").strip().upper()
+        asset_type = str(item.get("asset_type") or _asset_type_from_history_row(item)).strip().upper()
+        meta = instrument_meta.get((asset_type, symbol), {})
+        item.setdefault("symbol", symbol)
+        item.setdefault("asset_type", asset_type)
+        item.setdefault("name", meta.get("name"))
+        item.setdefault("exchange", meta.get("exchange") or item.get("base"))
+        item.setdefault("currency", meta.get("currency"))
+        item.setdefault("sector", meta.get("sector"))
+        if asset_type == "MACRO":
+            item.setdefault("unit", macro_units.get(symbol))
+        enriched.append(apply_display_metadata(item))
+    return enriched
+
+
+def _asset_type_from_history_row(row: dict[str, Any]) -> str:
+    if "rate" in row or "base" in row:
+        return "FX"
+    if "price_usd" in row:
+        return "CRYPTO"
+    if "indicator_code" in row:
+        return "MACRO"
+    return "STOCK"
 
 
 def upsert_stock_prices_daily(db_path: str, rows: list[StockPriceDailyRow]) -> int:
@@ -600,7 +666,7 @@ def get_stock_history(db_path: str, symbol: str, start: str | None = None, end: 
             """,
             params,
         ).fetchall()
-    return [dict(row) for row in rows]
+    return _with_display_metadata(db_path, [dict(row) for row in rows])
 
 
 def get_fx_history(
@@ -630,7 +696,7 @@ def get_fx_history(
             """,
             params,
         ).fetchall()
-    return [dict(row) for row in rows]
+    return _with_display_metadata(db_path, [dict(row) for row in rows])
 
 
 def get_macro_history(
@@ -659,7 +725,7 @@ def get_macro_history(
             """,
             params,
         ).fetchall()
-    return [dict(row) for row in rows]
+    return _with_display_metadata(db_path, [dict(row) for row in rows])
 
 
 def get_crypto_history(
@@ -688,7 +754,7 @@ def get_crypto_history(
             """,
             params,
         ).fetchall()
-    return [dict(row) for row in rows]
+    return _with_display_metadata(db_path, [dict(row) for row in rows])
 
 
 def get_latest_quotes(
@@ -728,7 +794,7 @@ def get_latest_quotes(
             """,
             params,
         ).fetchall()
-    return [dict(row) for row in rows]
+    return _with_display_metadata(db_path, [dict(row) for row in rows])
 
 
 def get_latest_analysis(
@@ -769,7 +835,8 @@ def get_latest_analysis(
             """,
             params,
         ).fetchall()
-    return [dict(row) for row in rows]
+    enriched = _with_display_metadata(db_path, [dict(row) for row in rows])
+    return [_with_technical_summary(row) for row in enriched]
 
 
 def get_dashboard_summary(db_path: str) -> dict[str, Any]:
@@ -888,7 +955,8 @@ def get_top_stocks_30d(db_path: str, symbols: list[str], days: int = 30) -> list
     return results
 
 
-def get_fixed_dashboard_charts(db_path: str, days: int = 30) -> dict[str, list[dict[str, Any]]]:
+def get_fixed_dashboard_charts(db_path: str, days: int = 30, period: str | None = None) -> dict[str, list[dict[str, Any]]]:
+    period_label = (period or f"{days}D").strip().upper()
     usd_brl_points = _fx_points(db_path, "USD", "BRL", days)
     usd_eur_points = _fx_points(db_path, "USD", "EUR", days)
     btc_points = _crypto_points(db_path, "BTC", days)
@@ -898,62 +966,83 @@ def get_fixed_dashboard_charts(db_path: str, days: int = 30) -> dict[str, list[d
         "fx": [
             {
                 "id": "usd_brl_30d",
-                "title": "USD/BRL - Last 30 Days",
                 "asset_type": "FX",
                 "base": "USD",
                 "symbol": "BRL",
+                **_chart_metadata("BRL", "FX", "Brazilian Real", exchange="USD", base_currency="USD", period=period_label),
+                "period": period_label,
+                "start_date": _points_start(usd_brl_points),
+                "end_date": _points_end(usd_brl_points),
+                "point_count": len(usd_brl_points),
                 "points": usd_brl_points,
-                "message": None if usd_brl_points else "No USD/BRL history available. Run dashboard prepare-demo.",
+                "message": None if usd_brl_points else f"No USD/BRL history available for {period_label}. Run dashboard prepare-demo.",
             },
             {
                 "id": "usd_eur_30d",
-                "title": "USD/EUR - Last 30 Days",
                 "asset_type": "FX",
                 "base": "USD",
                 "symbol": "EUR",
+                **_chart_metadata("EUR", "FX", "Euro", exchange="USD", base_currency="USD", period=period_label),
+                "period": period_label,
+                "start_date": _points_start(usd_eur_points),
+                "end_date": _points_end(usd_eur_points),
+                "point_count": len(usd_eur_points),
                 "points": usd_eur_points,
-                "message": None if usd_eur_points else "No USD/EUR history available. Run dashboard prepare-demo.",
+                "message": None if usd_eur_points else f"No USD/EUR history available for {period_label}. Run dashboard prepare-demo.",
             },
         ],
         "crypto": [
             {
                 "id": "btc_usd_30d",
-                "title": "Bitcoin - Last 30 Days",
                 "asset_type": "CRYPTO",
                 "symbol": "BTC",
+                **_chart_metadata("BTC", "CRYPTO", "Bitcoin", exchange="CRYPTO", period=period_label),
+                "period": period_label,
+                "start_date": _points_start(btc_points),
+                "end_date": _points_end(btc_points),
+                "point_count": len(btc_points),
                 "points": btc_points,
-                "message": None if btc_points else "No BTC history available. Run dashboard prepare-demo.",
+                "message": None if btc_points else f"No BTC/USD history available for {period_label}. Run dashboard prepare-demo.",
             },
             {
                 "id": "eth_usd_30d",
-                "title": "Ethereum - Last 30 Days",
                 "asset_type": "CRYPTO",
                 "symbol": "ETH",
+                **_chart_metadata("ETH", "CRYPTO", "Ethereum", exchange="CRYPTO", period=period_label),
+                "period": period_label,
+                "start_date": _points_start(eth_points),
+                "end_date": _points_end(eth_points),
+                "point_count": len(eth_points),
                 "points": eth_points,
-                "message": None if eth_points else "No ETH history available. Run dashboard prepare-demo.",
+                "message": None if eth_points else f"No ETH/USD history available for {period_label}. Run dashboard prepare-demo.",
             },
         ],
         "macro": [
             {
                 "id": "selic_30d",
-                "title": "Selic - Last 30 Days",
                 "asset_type": "MACRO",
                 "symbol": "SELIC_DAILY",
+                **_chart_metadata("SELIC_DAILY", "MACRO", "Selic Daily Rate", exchange="MACRO", unit="% a.d.", period=period_label),
+                "period": period_label,
+                "start_date": _points_start(selic_points),
+                "end_date": _points_end(selic_points),
+                "point_count": len(selic_points),
                 "points": selic_points,
-                "message": None if selic_points else "No Selic history available. Run dashboard prepare-demo.",
+                "message": None if selic_points else f"No Selic history available for {period_label}. Run dashboard prepare-demo.",
             }
         ],
     }
 
 
-def get_market_overview(db_path: str) -> dict[str, Any]:
-    top_stock, worst_stock = _stock_performer_cards(db_path)
+def get_market_overview(db_path: str, days: int = 30, period: str | None = None) -> dict[str, Any]:
+    period_label = (period or f"{days}D").strip().upper()
+    top_stock, worst_stock = _stock_performer_cards(db_path, days=days, period=period_label)
     cards = [
-        _overview_card("USD/BRL", _fx_points(db_path, "USD", "BRL", 30), None),
-        _overview_card("USD/EUR", _fx_points(db_path, "USD", "EUR", 30), None),
-        _overview_card("BTC/USD", _crypto_points(db_path, "BTC", 30), "USD"),
-        _overview_card("ETH/USD", _crypto_points(db_path, "ETH", 30), "USD"),
-        _overview_card("Selic", _macro_points(db_path, "SELIC_DAILY", 30), "% a.d."),
+        _overview_card("USD/BRL", _fx_points(db_path, "USD", "BRL", days), "BRL per 1 USD"),
+        _overview_card("USD/EUR", _fx_points(db_path, "USD", "EUR", days), "EUR per 1 USD"),
+        _overview_card("BTC/USD", _crypto_points(db_path, "BTC", days), "USD"),
+        _overview_card("ETH/USD", _crypto_points(db_path, "ETH", days), "USD"),
+        _overview_card("Selic", _macro_points(db_path, "SELIC_DAILY", days), "% a.d."),
         top_stock,
         worst_stock,
     ]
@@ -971,10 +1060,126 @@ def get_market_overview(db_path: str) -> dict[str, Any]:
         ).fetchall()
     return {
         "generated_at": utc_now_iso(),
+        "period": period_label,
         "cards": cards,
-        "signals": [dict(row) for row in signals],
+        "signals": [_with_technical_summary(apply_display_metadata(dict(row))) for row in signals],
         "message": None if cards else DASHBOARD_EMPTY_MESSAGE,
     }
+
+
+def get_dashboard_overview(db_path: str, days: int = 90, period: str | None = "90D") -> dict[str, Any]:
+    period_label = (period or f"{days}D").strip().upper()
+    return {
+        "generated_at": utc_now_iso(),
+        "period": period_label,
+        "summary": get_dashboard_summary(db_path),
+        "market_overview_cards": get_market_overview(db_path, days=days, period=period_label)["cards"],
+        "fixed_charts": get_fixed_dashboard_charts(db_path, days=days, period=period_label),
+        "technical_highlights": get_technical_highlights(db_path, days=days, period=period_label),
+        "performance_ranking": get_performance_ranking(db_path, days=days, period=period_label),
+        "data_quality": get_system_status(db_path),
+    }
+
+
+def get_technical_highlights(db_path: str, days: int = 90, period: str | None = "90D") -> dict[str, Any]:
+    rows = get_performance_ranking(db_path, days=days, period=period, asset_type=None, limit=68)["items"]
+    positive = [row for row in rows if row["technical_score"] > 0]
+    negative = [row for row in rows if row["technical_score"] < 0]
+    volatile = [row for row in rows if row.get("signal") == "VOLATILE"]
+    stable = [row for row in rows if row.get("technical_label") in {"Stable", "Neutral"}]
+    breakout = [row for row in rows if row.get("signal") == "BREAKOUT"]
+    drawdown = [row for row in rows if row.get("signal") == "DRAWDOWN"]
+    return {
+        "period": (period or f"{days}D").strip().upper(),
+        "positive_momentum": positive[:5],
+        "negative_momentum": negative[:5],
+        "breakout_watch": breakout[:5],
+        "drawdown_risk": drawdown[:5],
+        "stable": stable[:5],
+        "volatile": volatile[:5],
+    }
+
+
+def get_performance_ranking(
+    db_path: str,
+    days: int = 90,
+    period: str | None = "90D",
+    asset_type: str | None = None,
+    limit: int = 10,
+) -> dict[str, Any]:
+    normalized_type = asset_type.strip().upper() if asset_type else None
+    rows: list[dict[str, Any]] = []
+    for instrument in list_instruments(db_path, asset_type=normalized_type, active=True):
+        points = _points_for_instrument(db_path, instrument, days)
+        if len(points) < 2:
+            continue
+        start_price = points[0]["value"]
+        latest_price = points[-1]["value"]
+        change = _percent_change(start_price, latest_price)
+        analysis = _latest_analysis_for_symbol(db_path, instrument["symbol"], instrument["asset_type"])
+        item = {
+            **instrument,
+            "latest_price": latest_price,
+            "start_price": start_price,
+            "period_change": change,
+            "change": change,
+            "trend": analysis.get("trend", "UNKNOWN"),
+            "signal": analysis.get("signal", "UNKNOWN"),
+            "volatility_20": analysis.get("volatility_20"),
+            "points": points,
+            "period": (period or f"{days}D").strip().upper(),
+            "point_count": len(points),
+            "start_date": _points_start(points),
+            "end_date": _points_end(points),
+        }
+        rows.append(_with_technical_summary(item))
+    ranked = sorted(rows, key=lambda item: item.get("period_change") if item.get("period_change") is not None else -999, reverse=True)
+    bottom = sorted(rows, key=lambda item: item.get("period_change") if item.get("period_change") is not None else 999)
+    return {
+        "period": (period or f"{days}D").strip().upper(),
+        "asset_type": normalized_type or "ALL",
+        "count": len(rows),
+        "top": ranked[:limit],
+        "bottom": bottom[:limit],
+        "items": ranked,
+    }
+
+
+def _chart_metadata(
+    symbol: str,
+    asset_type: str,
+    display_name: str | None = None,
+    exchange: str | None = None,
+    currency: str | None = None,
+    unit: str | None = None,
+    base_currency: str | None = None,
+    period: str = "30D",
+) -> dict[str, Any]:
+    metadata = build_display_metadata(
+        symbol=symbol,
+        asset_type=asset_type,
+        display_name=display_name,
+        exchange=exchange,
+        currency=currency,
+        unit=unit,
+        base_currency=base_currency,
+    )
+    return {
+        **metadata,
+        "title": f"{metadata['chart_title']} - {period}",
+    }
+
+
+def period_to_days(period: str | None, default: int = 90) -> tuple[str, int]:
+    normalized = (period or f"{default}D").strip().upper()
+    mapping = {
+        "30D": 30,
+        "90D": 90,
+        "6M": 183,
+        "1Y": 365,
+        "4Y": 1460,
+    }
+    return (normalized if normalized in mapping else f"{default}D", mapping.get(normalized, default))
 
 
 def _latest_stock_points(db_path: str, symbol: str, limit: int) -> list[dict[str, Any]]:
@@ -991,6 +1196,18 @@ def _latest_stock_points(db_path: str, symbol: str, limit: int) -> list[dict[str
             (symbol.strip().upper(), limit),
         ).fetchall()
     return [dict(row) for row in reversed(rows)]
+
+
+def _points_for_instrument(db_path: str, instrument: dict[str, Any], limit: int) -> list[dict[str, Any]]:
+    asset_type = str(instrument.get("asset_type") or "").upper()
+    symbol = str(instrument.get("symbol") or "").upper()
+    if asset_type == "FX":
+        return _fx_points(db_path, instrument.get("exchange") or "USD", symbol, limit)
+    if asset_type == "CRYPTO":
+        return _crypto_points(db_path, symbol, limit)
+    if asset_type == "MACRO":
+        return _macro_points(db_path, symbol, limit)
+    return _latest_stock_points(db_path, symbol, limit)
 
 
 def _fx_points(db_path: str, base: str, symbol: str, limit: int) -> list[dict[str, Any]]:
@@ -1062,7 +1279,9 @@ def _latest_analysis_for_symbol(db_path: str, symbol: str, asset_type: str) -> d
         conn.row_factory = sqlite3.Row
         row = conn.execute(
             """
-            SELECT symbol, asset_type, trend, signal, generated_at
+            SELECT symbol, asset_type, trend, signal, generated_at,
+                   last_price, last_close, change_30d, change_90d, change_1y,
+                   sma_20, sma_50, volatility_20
             FROM analysis_snapshots
             WHERE symbol = ? AND asset_type = ?
             ORDER BY generated_at DESC
@@ -1087,13 +1306,13 @@ def _overview_card(label: str, points: list[dict[str, Any]], unit: str | None) -
     return {"label": label, "value": latest, "change": change, "unit": unit, "status": status}
 
 
-def _stock_performer_cards(db_path: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+def _stock_performer_cards(db_path: str, days: int = 30, period: str = "30D") -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     with sqlite3.connect(db_path) as conn:
         rows = conn.execute("SELECT DISTINCT symbol FROM stock_prices_daily ORDER BY symbol").fetchall()
     performers: list[tuple[str, float, float]] = []
     for row in rows:
         symbol = str(row[0])
-        points = _latest_stock_points(db_path, symbol, 30)
+        points = _latest_stock_points(db_path, symbol, days)
         if len(points) < 2:
             continue
         change = _percent_change(points[0]["value"], points[-1]["value"])
@@ -1104,9 +1323,109 @@ def _stock_performer_cards(db_path: str) -> tuple[dict[str, Any] | None, dict[st
     best = max(performers, key=lambda item: item[2])
     worst = min(performers, key=lambda item: item[2])
     return (
-        {"label": f"Top 30D {best[0]}", "value": best[1], "change": best[2], "unit": "USD", "status": "up"},
-        {"label": f"Worst 30D {worst[0]}", "value": worst[1], "change": worst[2], "unit": "USD", "status": "down"},
+        {"label": f"Top {period} {best[0]}", "value": best[1], "change": best[2], "unit": "USD", "status": "up"},
+        {"label": f"Worst {period} {worst[0]}", "value": worst[1], "change": worst[2], "unit": "USD", "status": "down"},
     )
+
+
+def _points_start(points: list[dict[str, Any]]) -> str | None:
+    return points[0]["date"] if points else None
+
+
+def _points_end(points: list[dict[str, Any]]) -> str | None:
+    return points[-1]["date"] if points else None
+
+
+def _with_technical_summary(row: dict[str, Any]) -> dict[str, Any]:
+    result = dict(row)
+    score = _technical_score(result)
+    result["technical_score"] = score
+    result["technical_label"] = _technical_label(score)
+    result["technical_tone"] = _technical_tone(score, result.get("signal"))
+    result["technical_summary"] = _technical_summary_text(result, score)
+    return result
+
+
+def _technical_score(row: dict[str, Any]) -> int:
+    trend = str(row.get("trend") or "").upper()
+    signal = str(row.get("signal") or "").upper()
+    change = _first_number(row.get("period_change"), row.get("change_90d"), row.get("change_30d"), row.get("change"))
+    volatility = _first_number(row.get("volatility_20"))
+    score = 0
+    if trend == "UP":
+        score += 2
+    elif trend == "DOWN":
+        score -= 2
+    if signal == "BREAKOUT":
+        score += 2
+    elif signal == "DRAWDOWN":
+        score -= 2
+    elif signal == "VOLATILE":
+        score -= 1
+    elif signal == "STABLE":
+        score += 1
+    if change is not None:
+        if change > 8:
+            score += 2
+        elif change > 1:
+            score += 1
+        elif change < -8:
+            score -= 2
+        elif change < -1:
+            score -= 1
+    if volatility is not None and volatility > 0.035:
+        score -= 1
+    return max(-6, min(6, score))
+
+
+def _technical_label(score: int) -> str:
+    if score >= 4:
+        return "Strong Positive"
+    if score >= 2:
+        return "Positive"
+    if score <= -4:
+        return "Strong Negative"
+    if score <= -2:
+        return "Negative"
+    if score == 0:
+        return "Neutral"
+    return "Watch"
+
+
+def _technical_tone(score: int, signal: Any) -> str:
+    if str(signal or "").upper() == "VOLATILE":
+        return "watch"
+    if score >= 2:
+        return "positive"
+    if score <= -2:
+        return "negative"
+    return "neutral"
+
+
+def _technical_summary_text(row: dict[str, Any], score: int) -> str:
+    symbol = row.get("display_pair") or row.get("symbol") or "Asset"
+    change = _first_number(row.get("period_change"), row.get("change_90d"), row.get("change_30d"), row.get("change"))
+    label = _technical_label(score)
+    if score >= 2:
+        return f"{symbol} shows positive technical momentum over the selected period."
+    if score <= -2:
+        return f"{symbol} is under negative technical pressure. Watch drawdown risk."
+    if str(row.get("signal") or "").upper() == "VOLATILE":
+        return f"{symbol} remains volatile; monitor risk before interpreting direction."
+    if change is not None and abs(change) < 1:
+        return f"{symbol} is broadly stable over the selected period."
+    return f"{symbol} is classified as {label.lower()} from current trend and signal data."
+
+
+def _first_number(*values: Any) -> float | None:
+    for value in values:
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def _percent_change(start: float | None, end: float | None) -> float | None:

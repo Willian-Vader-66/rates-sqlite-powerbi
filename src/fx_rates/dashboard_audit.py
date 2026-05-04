@@ -61,6 +61,7 @@ def audit_dashboard(db_path: str, expected_years: int = 4) -> dict[str, Any]:
         duplicate_instruments = _duplicates(conn, "instruments", "asset_type, symbol")
         duplicate_quotes = _duplicates(conn, "market_quotes_latest", "asset_type, symbol")
         quote_consistency = [_quote_consistency(conn, asset_type, label) for asset_type, label in IMPORTANT_SERIES]
+        suspicious_values = _suspicious_values(conn)
 
     total_instruments = sum(instruments_by_type.values())
     alerts = _alerts(
@@ -72,6 +73,7 @@ def audit_dashboard(db_path: str, expected_years: int = 4) -> dict[str, Any]:
         duplicate_instruments=duplicate_instruments,
         duplicate_quotes=duplicate_quotes,
         quote_consistency=quote_consistency,
+        suspicious_values=suspicious_values,
     )
     if status["is_empty"]:
         alerts.append("SQLite database is empty")
@@ -95,6 +97,7 @@ def audit_dashboard(db_path: str, expected_years: int = 4) -> dict[str, Any]:
         "duplicate_instruments": duplicate_instruments,
         "duplicate_quotes": duplicate_quotes,
         "quote_consistency": quote_consistency,
+        "suspicious_values": suspicious_values,
         "alerts": alerts,
     }
 
@@ -147,6 +150,9 @@ def format_dashboard_audit(audit: dict[str, Any]) -> str:
     lines.append(f"Instruments without analysis: {len(audit['missing_analysis'])}")
     lines.append(f"Duplicate instruments: {len(audit['duplicate_instruments'])}")
     lines.append(f"Duplicate quotes: {len(audit['duplicate_quotes'])}")
+    lines.append(f"Suspicious values: {len(audit['suspicious_values'])}")
+    for item in audit["suspicious_values"][:12]:
+        lines.append(f"  WARN: {item}")
     if audit["alerts"]:
         lines.append("Alerts:")
         lines.extend(f"  ALERT: {alert}" for alert in audit["alerts"])
@@ -303,6 +309,113 @@ def _latest_quote_value(
     return {"price": row[0], "bid": row[1], "ask": row[2], "quote_time": row[3]}
 
 
+def _suspicious_values(conn: sqlite3.Connection) -> list[str]:
+    checks: list[str] = []
+    checks.extend(
+        _format_rows(
+            conn,
+            """
+            SELECT symbol, price
+            FROM market_quotes_latest
+            WHERE asset_type='STOCK' AND (price > 10000 OR price <= 0)
+            ORDER BY price DESC
+            """,
+            "STOCK latest quote suspicious",
+        )
+    )
+    checks.extend(
+        _format_rows(
+            conn,
+            """
+            SELECT symbol, close AS price
+            FROM stock_prices_daily
+            WHERE close > 10000 OR close <= 0
+            GROUP BY symbol
+            ORDER BY close DESC
+            """,
+            "STOCK history suspicious",
+        )
+    )
+    checks.extend(
+        _format_rows(
+            conn,
+            """
+            SELECT symbol, price_usd AS price
+            FROM crypto_prices_daily
+            WHERE price_usd <= 0
+            GROUP BY symbol
+            """,
+            "CRYPTO history non-positive",
+        )
+    )
+    checks.extend(
+        _format_rows(
+            conn,
+            """
+            SELECT base || '/' || symbol AS symbol, rate AS price
+            FROM fx_rates
+            WHERE rate <= 0
+            GROUP BY base, symbol
+            """,
+            "FX history non-positive",
+        )
+    )
+    checks.extend(
+        _format_rows(
+            conn,
+            """
+            SELECT indicator_code AS symbol, value AS price
+            FROM macro_indicators_daily
+            WHERE unit IS NULL OR unit = ''
+            GROUP BY indicator_code
+            """,
+            "MACRO unit missing",
+        )
+    )
+    checks.extend(_short_series(conn, "stock_prices_daily", "symbol", None, 700, "STOCK series under 700 points"))
+    checks.extend(_short_series(conn, "crypto_prices_daily", "symbol", None, 1400, "CRYPTO series under 1400 points"))
+    checks.extend(_short_series(conn, "fx_rates", "symbol", "base", 1400, "FX series under 1400 points"))
+    return checks
+
+
+def _format_rows(conn: sqlite3.Connection, sql: str, prefix: str) -> list[str]:
+    rows = conn.execute(sql).fetchall()
+    return [f"{prefix}: {row[0]}={_format_number(row[1])}" for row in rows]
+
+
+def _short_series(
+    conn: sqlite3.Connection,
+    table: str,
+    symbol_column: str,
+    base_column: str | None,
+    min_count: int,
+    prefix: str,
+) -> list[str]:
+    if base_column:
+        rows = conn.execute(
+            f"""
+            SELECT {base_column} || '/' || {symbol_column} AS label, COUNT(*) AS count
+            FROM {table}
+            GROUP BY {base_column}, {symbol_column}
+            HAVING COUNT(*) < ?
+            ORDER BY count
+            """,
+            (min_count,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            f"""
+            SELECT {symbol_column} AS label, COUNT(*) AS count
+            FROM {table}
+            GROUP BY {symbol_column}
+            HAVING COUNT(*) < ?
+            ORDER BY count
+            """,
+            (min_count,),
+        ).fetchall()
+    return [f"{prefix}: {row[0]} has {row[1]} points" for row in rows]
+
+
 def _range_params(conn: sqlite3.Connection, table: str, column: str, where: str, params: list[str]) -> dict[str, Any]:
     row = conn.execute(f"SELECT MIN({column}), MAX({column}), COUNT(*) FROM {table} {where}", params).fetchone()
     return {"start": row[0], "end": row[1], "count": int(row[2] or 0)}
@@ -353,6 +466,7 @@ def _alerts(
     duplicate_instruments: list[str],
     duplicate_quotes: list[str],
     quote_consistency: list[dict[str, Any]],
+    suspicious_values: list[str],
 ) -> list[str]:
     alerts: list[str] = []
     if missing_quotes:
@@ -370,6 +484,8 @@ def _alerts(
     if failed_consistency:
         labels = ", ".join(item["label"] for item in failed_consistency)
         alerts.append(f"quote/history ratio failed for: {labels}")
+    if suspicious_values:
+        alerts.append(f"{len(suspicious_values)} suspicious data/display values found")
     return alerts
 
 

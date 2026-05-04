@@ -205,9 +205,9 @@ class MockMarketDataProvider:
 
     def fetch_quote(self, symbol: str, asset_type: str = "STOCK", exchange: str | None = None) -> MarketQuoteRow:
         fetched_at = utc_now_iso()
-        minute_index = int(datetime.now(timezone.utc).timestamp() // 60)
-        price = _mock_price(symbol, minute_index)
-        previous_close = _mock_price(symbol, minute_index - 1)
+        day_index = int(datetime.now(timezone.utc).timestamp() // 86_400) % 2_500
+        price = _mock_price(symbol, day_index)
+        previous_close = _mock_price(symbol, day_index - 1)
         change = round(price - previous_close, 4)
         percent_change = round((change / previous_close) * 100, 4) if previous_close else None
         spread = max(0.01, price * 0.0005)
@@ -224,7 +224,7 @@ class MockMarketDataProvider:
             previous_close=previous_close,
             change=change,
             percent_change=percent_change,
-            volume=1_000_000 + int(_stable_unit(symbol, minute_index) * 8_000_000),
+            volume=1_000_000 + int(_stable_unit(symbol, day_index) * 8_000_000),
             quote_time=fetched_at,
             provider=self.name,
             fetched_at=fetched_at,

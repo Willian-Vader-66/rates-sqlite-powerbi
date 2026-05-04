@@ -205,23 +205,24 @@ class MockCryptoProvider:
 
     def fetch_quote(self, asset: CryptoAssetConfig) -> MarketQuoteRow:
         fetched_at = utc_now_iso()
-        minute_index = int(datetime.now(timezone.utc).timestamp() // 60)
-        price = _mock_price(asset.symbol, minute_index)
-        previous = _mock_price(asset.symbol, minute_index - 1440)
+        day_index = int(datetime.now(timezone.utc).timestamp() // 86_400) % 2_500
+        price = _mock_price(asset.symbol, day_index)
+        previous = _mock_price(asset.symbol, day_index - 1)
+        spread = max(0.0001, price * 0.0008)
         return MarketQuoteRow(
             symbol=asset.symbol,
             asset_type="CRYPTO",
             exchange="CRYPTO",
             price=price,
-            bid=None,
-            ask=None,
+            bid=round(price - spread, 4),
+            ask=round(price + spread, 4),
             open=previous,
             high=round(max(price, previous) * 1.02, 4),
             low=round(min(price, previous) * 0.98, 4),
             previous_close=previous,
             change=round(price - previous, 4),
             percent_change=_percent_change(previous, price),
-            volume=500_000 + int(_stable_unit(asset.symbol, minute_index) * 3_000_000),
+            volume=500_000 + int(_stable_unit(asset.symbol, day_index) * 3_000_000),
             quote_time=fetched_at,
             provider=self.name,
             fetched_at=fetched_at,

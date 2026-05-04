@@ -25,7 +25,14 @@ from .db_sqlite import (
 )
 from .macro_providers import MacroIndicatorConfig, build_macro_provider, load_macro_reference
 from .market_providers import build_market_provider
-from .models import FxRateRow, InstrumentRow, MacroIndicatorDailyRow, MarketQuoteRow
+from .models import (
+    CryptoPriceDailyRow,
+    FxRateRow,
+    InstrumentRow,
+    MacroIndicatorDailyRow,
+    MarketQuoteRow,
+    StockPriceDailyRow,
+)
 from .utils import utc_now_iso
 from .watchlist import load_currency_reference, load_stock_watchlist
 
@@ -131,10 +138,47 @@ def _prepare_stocks(settings: Settings, reference: str, start: str, end: str, st
             exchange=instrument.exchange,
         )
         rows_written += upsert_stock_prices_daily(settings.db_path, history)
-        quote_rows.append(provider.fetch_quote(instrument.symbol, asset_type="STOCK", exchange=instrument.exchange))
+        quote = _stock_quote_from_history(instrument.symbol, instrument.exchange, history)
+        if quote is not None:
+            quote_rows.append(quote)
 
     rows_written += upsert_market_quotes_latest(settings.db_path, quote_rows)
     return rows_written
+
+
+def _stock_quote_from_history(
+    symbol: str,
+    exchange: str | None,
+    history: list[StockPriceDailyRow],
+) -> MarketQuoteRow | None:
+    valid_rows = [row for row in history if row.close is not None]
+    if not valid_rows:
+        return None
+    latest = valid_rows[-1]
+    previous = valid_rows[-2] if len(valid_rows) > 1 else None
+    price = float(latest.close)
+    previous_close = float(previous.close) if previous and previous.close is not None else None
+    change = price - previous_close if previous_close is not None else None
+    percent_change = ((price / previous_close) - 1.0) * 100.0 if previous_close else None
+    spread = max(0.01, price * 0.0005)
+    return MarketQuoteRow(
+        symbol=symbol.strip().upper(),
+        asset_type="STOCK",
+        exchange=exchange or latest.exchange,
+        price=round(price, 4),
+        bid=round(price - spread, 4),
+        ask=round(price + spread, 4),
+        open=latest.open,
+        high=latest.high,
+        low=latest.low,
+        previous_close=round(previous_close, 4) if previous_close is not None else None,
+        change=round(change, 4) if change is not None else None,
+        percent_change=round(percent_change, 4) if percent_change is not None else None,
+        volume=latest.volume,
+        quote_time=latest.date,
+        provider=latest.provider,
+        fetched_at=utc_now_iso(),
+    )
 
 
 def _prepare_fx(settings: Settings, reference: str, start: date, end: date) -> int:
@@ -180,11 +224,48 @@ def _prepare_crypto(settings: Settings, reference: str, start: str, end: str) ->
     quote_rows: list[MarketQuoteRow] = []
 
     for asset in assets:
-        rows_written += upsert_crypto_prices_daily(settings.db_path, provider.fetch_daily(asset, start, end))
-        quote_rows.append(provider.fetch_quote(asset))
+        history = provider.fetch_daily(asset, start, end)
+        rows_written += upsert_crypto_prices_daily(settings.db_path, history)
+        quote = _crypto_quote_from_history(asset, history)
+        if quote is not None:
+            quote_rows.append(quote)
 
     rows_written += upsert_market_quotes_latest(settings.db_path, quote_rows)
     return rows_written
+
+
+def _crypto_quote_from_history(
+    asset: CryptoAssetConfig,
+    history: list[CryptoPriceDailyRow],
+) -> MarketQuoteRow | None:
+    valid_rows = [row for row in history if row.price_usd is not None]
+    if not valid_rows:
+        return None
+    latest = valid_rows[-1]
+    previous = valid_rows[-2] if len(valid_rows) > 1 else None
+    price = float(latest.price_usd)
+    previous_close = float(previous.price_usd) if previous and previous.price_usd is not None else None
+    change = price - previous_close if previous_close is not None else None
+    percent_change = ((price / previous_close) - 1.0) * 100.0 if previous_close else None
+    spread = max(0.0001, price * 0.0008)
+    return MarketQuoteRow(
+        symbol=asset.symbol,
+        asset_type="CRYPTO",
+        exchange="CRYPTO",
+        price=round(price, 4),
+        bid=round(price - spread, 4),
+        ask=round(price + spread, 4),
+        open=round(previous_close, 4) if previous_close is not None else None,
+        high=round(max(price, previous_close), 4) if previous_close is not None else round(price, 4),
+        low=round(min(price, previous_close), 4) if previous_close is not None else round(price, 4),
+        previous_close=round(previous_close, 4) if previous_close is not None else None,
+        change=round(change, 4) if change is not None else None,
+        percent_change=round(percent_change, 4) if percent_change is not None else None,
+        volume=int(latest.volume_24h) if latest.volume_24h is not None else None,
+        quote_time=latest.date,
+        provider=latest.provider,
+        fetched_at=utc_now_iso(),
+    )
 
 
 def _prepare_macro(settings: Settings, reference: str, start: str, end: str) -> int:

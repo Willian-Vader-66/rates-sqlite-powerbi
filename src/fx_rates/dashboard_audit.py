@@ -60,6 +60,7 @@ def audit_dashboard(db_path: str, expected_years: int = 4) -> dict[str, Any]:
         missing_analysis = _missing(conn, "analysis_snapshots")
         duplicate_instruments = _duplicates(conn, "instruments", "asset_type, symbol")
         duplicate_quotes = _duplicates(conn, "market_quotes_latest", "asset_type, symbol")
+        quote_consistency = [_quote_consistency(conn, asset_type, label) for asset_type, label in IMPORTANT_SERIES]
 
     total_instruments = sum(instruments_by_type.values())
     alerts = _alerts(
@@ -70,6 +71,7 @@ def audit_dashboard(db_path: str, expected_years: int = 4) -> dict[str, Any]:
         missing_analysis=missing_analysis,
         duplicate_instruments=duplicate_instruments,
         duplicate_quotes=duplicate_quotes,
+        quote_consistency=quote_consistency,
     )
     if status["is_empty"]:
         alerts.append("SQLite database is empty")
@@ -92,6 +94,7 @@ def audit_dashboard(db_path: str, expected_years: int = 4) -> dict[str, Any]:
         "missing_analysis": missing_analysis,
         "duplicate_instruments": duplicate_instruments,
         "duplicate_quotes": duplicate_quotes,
+        "quote_consistency": quote_consistency,
         "alerts": alerts,
     }
 
@@ -124,6 +127,22 @@ def format_dashboard_audit(audit: dict[str, Any]) -> str:
     lines.append("Important series:")
     for label, coverage in audit["important_ranges"].items():
         lines.append(f"  {label}: {_format_range(coverage)}")
+    lines.append("Quote consistency examples:")
+    lines.append("  symbol asset_type latest_quote last_history ratio rows date_min date_max status")
+    for item in audit["quote_consistency"]:
+        lines.append(
+            "  {symbol} {asset_type} {latest_quote} {last_history} {ratio} {rows} {date_min} {date_max} {status}".format(
+                symbol=item["symbol"],
+                asset_type=item["asset_type"],
+                latest_quote=_format_number(item["latest_quote"]),
+                last_history=_format_number(item["last_history"]),
+                ratio=_format_number(item["ratio"]),
+                rows=item["historical_rows"],
+                date_min=item["date_min"] or "-",
+                date_max=item["date_max"] or "-",
+                status=item["status"],
+            )
+        )
     lines.append(f"Instruments without quote: {len(audit['missing_quotes'])}")
     lines.append(f"Instruments without analysis: {len(audit['missing_analysis'])}")
     lines.append(f"Duplicate instruments: {len(audit['duplicate_instruments'])}")
@@ -169,6 +188,119 @@ def _important_range(conn: sqlite3.Connection, asset_type: str, label: str) -> d
     if asset_type == "MACRO":
         return _range_params(conn, "macro_indicators_daily", "date", "WHERE indicator_code=?", [label])
     return _range_params(conn, "stock_prices_daily", "date", "WHERE symbol=?", [label])
+
+
+def _quote_consistency(conn: sqlite3.Connection, asset_type: str, label: str) -> dict[str, Any]:
+    symbol = label
+    quote_exchange: str | None = None
+    if asset_type == "FX":
+        base, symbol = label.split("/")
+        quote_exchange = base
+        history = _last_history_value(
+            conn,
+            "fx_rates",
+            "rate",
+            "WHERE base=? AND symbol=?",
+            [base, symbol],
+        )
+    elif asset_type == "CRYPTO":
+        history = _last_history_value(
+            conn,
+            "crypto_prices_daily",
+            "price_usd",
+            "WHERE symbol=?",
+            [symbol],
+        )
+    elif asset_type == "MACRO":
+        history = _last_history_value(
+            conn,
+            "macro_indicators_daily",
+            "value",
+            "WHERE indicator_code=?",
+            [symbol],
+        )
+    else:
+        history = _last_history_value(
+            conn,
+            "stock_prices_daily",
+            "close",
+            "WHERE symbol=?",
+            [symbol],
+        )
+
+    quote = _latest_quote_value(conn, asset_type, symbol, quote_exchange)
+    latest_quote = quote["price"]
+    last_history = history["value"]
+    ratio = latest_quote / last_history if latest_quote is not None and last_history not in {None, 0} else None
+    status = "OK"
+    if latest_quote is None or last_history is None:
+        status = "WARN"
+    elif ratio is None or ratio > 2.0 or ratio < 0.5:
+        status = "FAIL"
+    elif ratio > 1.05 or ratio < 0.95:
+        status = "WARN"
+    return {
+        "label": label,
+        "symbol": symbol,
+        "asset_type": asset_type,
+        "latest_quote": latest_quote,
+        "last_history": last_history,
+        "ratio": ratio,
+        "historical_rows": history["count"],
+        "date_min": history["date_min"],
+        "date_max": history["date_max"],
+        "status": status,
+    }
+
+
+def _last_history_value(
+    conn: sqlite3.Connection,
+    table: str,
+    value_column: str,
+    where: str,
+    params: list[str],
+) -> dict[str, Any]:
+    row = conn.execute(
+        f"""
+        SELECT {value_column}, date,
+               (SELECT MIN(date) FROM {table} {where}) AS date_min,
+               (SELECT COUNT(*) FROM {table} {where}) AS row_count
+        FROM {table}
+        {where}
+        ORDER BY date DESC
+        LIMIT 1
+        """,
+        params + params + params,
+    ).fetchone()
+    if row is None:
+        return {"value": None, "date_min": None, "date_max": None, "count": 0}
+    return {"value": row[0], "date_min": row[2], "date_max": row[1], "count": int(row[3] or 0)}
+
+
+def _latest_quote_value(
+    conn: sqlite3.Connection,
+    asset_type: str,
+    symbol: str,
+    exchange: str | None,
+) -> dict[str, Any]:
+    params: list[Any] = [asset_type, symbol]
+    exchange_clause = ""
+    if exchange is not None:
+        exchange_clause = "AND exchange = ?"
+        params.append(exchange)
+    row = conn.execute(
+        f"""
+        SELECT price, bid, ask, quote_time
+        FROM market_quotes_latest
+        WHERE asset_type=? AND symbol=? {exchange_clause}
+        ORDER BY fetched_at DESC, quote_time DESC
+        LIMIT 1
+        """,
+        params,
+    ).fetchone()
+    if row is None:
+        return {"price": None, "bid": None, "ask": None, "quote_time": None}
+    return {"price": row[0], "bid": row[1], "ask": row[2], "quote_time": row[3]}
 
 
 def _range_params(conn: sqlite3.Connection, table: str, column: str, where: str, params: list[str]) -> dict[str, Any]:
@@ -220,6 +352,7 @@ def _alerts(
     missing_analysis: list[str],
     duplicate_instruments: list[str],
     duplicate_quotes: list[str],
+    quote_consistency: list[dict[str, Any]],
 ) -> list[str]:
     alerts: list[str] = []
     if missing_quotes:
@@ -233,6 +366,10 @@ def _alerts(
     for label, coverage in {**ranges_by_type, **important}.items():
         if coverage["count"] and _coverage_years(coverage) < expected_years - 0.25:
             alerts.append(f"{label} history is shorter than {expected_years} years: {_format_range(coverage)}")
+    failed_consistency = [item for item in quote_consistency if item["status"] == "FAIL"]
+    if failed_consistency:
+        labels = ", ".join(item["label"] for item in failed_consistency)
+        alerts.append(f"quote/history ratio failed for: {labels}")
     return alerts
 
 
@@ -250,6 +387,12 @@ def _format_counts(counts: dict[str, int]) -> str:
 
 def _format_range(coverage: dict[str, Any]) -> str:
     return f"{coverage.get('start') or '-'} to {coverage.get('end') or '-'} ({coverage.get('count', 0)} rows)"
+
+
+def _format_number(value: float | int | None) -> str:
+    if value is None:
+        return "-"
+    return f"{float(value):.6g}"
 
 
 def _format_bytes(size_bytes: int) -> str:

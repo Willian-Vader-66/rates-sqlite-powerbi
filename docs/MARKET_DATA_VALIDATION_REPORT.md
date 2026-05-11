@@ -93,3 +93,25 @@ python -m fx_rates dashboard audit-market
 ```
 
 `audit-market` reports data-mode counts, provider by asset type, demo/live/unknown symbols, stale data, missing quote/history/analysis links, suspicious ranges, missing stock currency, and macro unit issues. Demo data is a warning/risk, not a fatal error.
+
+## Live Ingestion Safety Addendum
+
+The current live hardening adds explicit data-loss protection around `prepare-live --replace-demo`:
+
+- API key placeholders are invalid even when an environment variable is present.
+- `providers status` reports `key_present`, `key_valid_format`, `available`, `external_test`, and a summarized error without revealing secrets.
+- `providers status --external-test` is the only provider diagnostic that may call external APIs.
+- Live fetch and payload validation complete before any SQLite mutation.
+- Demo deletion under `--replace-demo` happens inside the same transaction as live inserts.
+- Rollback keeps existing demo/live rows if a write failure occurs.
+- `data_health` reports important symbols with zero history, quote/history mismatches, analysis without history, live rows without provider, and demo-like providers marked live.
+
+Validation target after a placeholder or bad Twelve Data key:
+
+```powershell
+python -m fx_rates dashboard prepare-live --years 4 --asset-type STOCK --symbols AAPL,MSFT,NVDA --replace-demo
+python -m fx_rates dashboard audit-market
+```
+
+Expected result: live ingest fails before DB mutation and AAPL/MSFT/NVDA retain their existing demo history.
+

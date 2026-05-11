@@ -557,3 +557,22 @@ The audit checks quote/history ratios, suspicious stock prices, non-positive FX/
 ### Re-running a backfill
 
 Re-running the same range is safe. The project uses SQLite UPSERT and updates the existing `(date, base, symbol)` row instead of inserting duplicates.
+
+### Safe Live Ingestion Flow
+
+`prepare-live` uses a two-phase flow. Phase A validates provider configuration, rejects placeholder API keys, fetches all requested live history, checks latest quotes against history, and keeps everything staged outside the permanent dataset. Phase B opens a SQLite transaction and only then applies `--replace-demo`, inserts live rows, writes latest quotes, analysis snapshots, and the ingest result.
+
+This means `--replace-demo` never deletes demo/local rows before the live fetch is complete and validated. If Twelve Data returns an invalid key error, a rate-limit response, an unsupported symbol, or an incomplete payload, the command aborts before DB mutation and existing data stays in place.
+
+Useful commands:
+
+```powershell
+python -m fx_rates providers status
+python -m fx_rates providers status --external-test
+python -m fx_rates dashboard prepare-live --years 4 --asset-type STOCK --symbols AAPL,MSFT,NVDA --replace-demo
+python -m fx_rates dashboard prepare-demo --years 4 --demo --symbols AAPL,MSFT,NVDA
+python -m fx_rates dashboard audit-market
+```
+
+Do not commit `data/*.sqlite`; SQLite files are runtime state, not source code.
+

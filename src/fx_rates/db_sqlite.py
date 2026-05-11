@@ -732,6 +732,207 @@ def _delete_mode_rows(
     return int(cursor.rowcount or 0)
 
 
+def commit_prepared_live_dataset(
+    db_path: str,
+    *,
+    instruments: list[InstrumentRow],
+    stock_rows: list[StockPriceDailyRow],
+    fx_rows: list[FxRateRow],
+    crypto_rows: list[CryptoPriceDailyRow],
+    macro_rows: list[MacroIndicatorDailyRow],
+    quote_rows: list[MarketQuoteRow],
+    analysis_rows: list[AnalysisSnapshotRow],
+    replace_demo: bool,
+    asset_types: list[str],
+    symbols: list[str] | None,
+    simulate_failure_after_delete: bool = False,
+) -> int:
+    normalized_symbols = sorted({item.strip().upper() for item in symbols or _symbols_from_live_payload(instruments, stock_rows, fx_rows, crypto_rows, macro_rows, quote_rows) if item.strip()})
+    row_count = 0
+    with sqlite3.connect(db_path) as conn:
+        try:
+            conn.execute("BEGIN")
+            if replace_demo:
+                _delete_mode_rows(conn, "instruments", "data_mode = ?", ["demo"], asset_col="asset_type", symbol_col="symbol", asset_types=set(asset_types), symbols=set(normalized_symbols))
+                _delete_mode_rows(conn, "market_quotes_latest", "data_mode = ?", ["demo"], asset_col="asset_type", symbol_col="symbol", asset_types=set(asset_types), symbols=set(normalized_symbols))
+                _delete_mode_rows(conn, "analysis_snapshots", "data_mode = ?", ["demo"], asset_col="asset_type", symbol_col="symbol", asset_types=set(asset_types), symbols=set(normalized_symbols))
+                if "STOCK" in asset_types:
+                    _delete_mode_rows(conn, "stock_prices_daily", "data_mode = ?", ["demo"], symbol_col="symbol", symbols=set(normalized_symbols))
+                if "FX" in asset_types:
+                    _delete_mode_rows(conn, "fx_rates", "data_mode = ?", ["demo"], symbol_col="symbol", symbols=set(normalized_symbols))
+                if "CRYPTO" in asset_types:
+                    _delete_mode_rows(conn, "crypto_prices_daily", "data_mode = ?", ["demo"], symbol_col="symbol", symbols=set(normalized_symbols))
+                if "MACRO" in asset_types:
+                    _delete_mode_rows(conn, "macro_indicators_daily", "data_mode = ?", ["demo"], symbol_col="indicator_code", symbols=set(normalized_symbols))
+                if simulate_failure_after_delete:
+                    raise RuntimeError("simulated failure after delete")
+            if instruments:
+                conn.executemany(UPSERT_INSTRUMENT_SQL, [row.as_db_dict() for row in instruments])
+                row_count += len(instruments)
+            if stock_rows:
+                conn.executemany(UPSERT_STOCK_PRICE_SQL, [row.as_db_dict() for row in stock_rows])
+                row_count += len(stock_rows)
+            if fx_rows:
+                conn.executemany(UPSERT_SQL, [row.as_db_dict() for row in fx_rows])
+                row_count += len(fx_rows)
+            if crypto_rows:
+                conn.executemany(UPSERT_CRYPTO_PRICE_SQL, [row.as_db_dict() for row in crypto_rows])
+                row_count += len(crypto_rows)
+            if macro_rows:
+                conn.executemany(UPSERT_MACRO_INDICATOR_SQL, [row.as_db_dict() for row in macro_rows])
+                row_count += len(macro_rows)
+            if quote_rows:
+                conn.executemany(UPSERT_MARKET_QUOTE_SQL, [row.as_db_dict() for row in quote_rows])
+                row_count += len(quote_rows)
+            if analysis_rows:
+                conn.executemany(INSERT_ANALYSIS_SNAPSHOT_SQL, [row.as_db_dict() for row in analysis_rows])
+                row_count += len(analysis_rows)
+            _deduplicate_dashboard_records_conn(conn)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    return row_count
+
+
+def _deduplicate_dashboard_records_conn(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        DELETE FROM instruments
+        WHERE instrument_id NOT IN (
+            SELECT MAX(instrument_id)
+            FROM instruments
+            GROUP BY asset_type, symbol
+        )
+        """
+    )
+    conn.execute(
+        """
+        DELETE FROM market_quotes_latest
+        WHERE rowid NOT IN (
+            SELECT MAX(rowid)
+            FROM market_quotes_latest
+            GROUP BY asset_type, symbol
+        )
+        """
+    )
+
+
+def _symbols_from_live_payload(
+    instruments: list[InstrumentRow],
+    stock_rows: list[StockPriceDailyRow],
+    fx_rows: list[FxRateRow],
+    crypto_rows: list[CryptoPriceDailyRow],
+    macro_rows: list[MacroIndicatorDailyRow],
+    quote_rows: list[MarketQuoteRow],
+) -> list[str]:
+    symbols: set[str] = set()
+    symbols.update(row.symbol for row in instruments)
+    symbols.update(row.symbol for row in stock_rows)
+    symbols.update(row.symbol for row in fx_rows)
+    symbols.update(row.symbol for row in crypto_rows)
+    symbols.update(row.indicator_code for row in macro_rows)
+    symbols.update(row.symbol for row in quote_rows)
+    return sorted(symbols)
+
+
+IMPORTANT_MARKET_SYMBOLS = {
+    "STOCK": {"AAPL", "MSFT", "NVDA"},
+    "FX": {"BRL", "EUR"},
+    "CRYPTO": {"BTC", "ETH"},
+    "MACRO": {"SELIC_DAILY"},
+}
+
+
+def get_data_health(db_path: str) -> dict[str, Any]:
+    path = Path(db_path).expanduser().resolve()
+    if not path.exists():
+        return {
+            "status": "FAIL",
+            "missing_important_symbols": ["DATABASE"],
+            "symbols_without_history": [],
+            "symbols_without_quote": [],
+            "analysis_without_history": [],
+            "live_without_provider": [],
+            "demo_masked_as_live": [],
+            "demo_count": 0,
+            "live_count": 0,
+            "mixed_count": 0,
+            "unknown_count": 0,
+            "repair_command": PREPARE_COMMAND,
+        }
+    with sqlite3.connect(str(path)) as conn:
+        conn.row_factory = sqlite3.Row
+        missing_important: list[str] = []
+        without_history: list[str] = []
+        without_quote: list[str] = []
+        analysis_without_history: list[str] = []
+        live_without_provider: list[str] = []
+        demo_masked_as_live: list[str] = []
+        for asset_type, symbols in IMPORTANT_MARKET_SYMBOLS.items():
+            for symbol in sorted(symbols):
+                history_count = _history_count_for_health(conn, asset_type, symbol)
+                quote_count = _quote_count_for_health(conn, asset_type, symbol)
+                key = f"{asset_type}:{symbol}"
+                if history_count == 0:
+                    missing_important.append(key)
+                    without_history.append(key)
+                if quote_count == 0:
+                    without_quote.append(key)
+        for row in conn.execute("SELECT asset_type, symbol, provider FROM market_quotes_latest WHERE data_mode='live'").fetchall():
+            if not row["provider"]:
+                live_without_provider.append(f"{row['asset_type']}:{row['symbol']}")
+            if row["provider"] and _is_demo_marker(row["provider"]):
+                demo_masked_as_live.append(f"{row['asset_type']}:{row['symbol']}")
+        for row in conn.execute("SELECT asset_type, symbol FROM analysis_snapshots GROUP BY asset_type, symbol").fetchall():
+            if _history_count_for_health(conn, str(row["asset_type"]), str(row["symbol"])) == 0:
+                analysis_without_history.append(f"{row['asset_type']}:{row['symbol']}")
+    data_mode = get_data_mode_summary(str(path))
+    counts = data_mode.get("data_mode_counts", {})
+    status = "OK"
+    if missing_important or analysis_without_history or demo_masked_as_live:
+        status = "FAIL"
+    elif without_quote or live_without_provider or data_mode.get("data_mode") == "mixed":
+        status = "WARN"
+    return {
+        "status": status,
+        "missing_important_symbols": missing_important,
+        "symbols_without_history": without_history,
+        "symbols_without_quote": without_quote,
+        "analysis_without_history": analysis_without_history,
+        "live_without_provider": live_without_provider,
+        "demo_masked_as_live": demo_masked_as_live,
+        "demo_count": int(counts.get("demo", 0)),
+        "live_count": int(counts.get("live", 0)),
+        "mixed_count": int(counts.get("mixed", 0)),
+        "unknown_count": int(counts.get("unknown", 0)),
+        "repair_command": "python -m fx_rates dashboard prepare-demo --years 4 --demo --symbols AAPL,MSFT,NVDA",
+    }
+
+
+def _history_count_for_health(conn: sqlite3.Connection, asset_type: str, symbol: str) -> int:
+    normalized = symbol.strip().upper()
+    if asset_type == "STOCK":
+        row = conn.execute("SELECT COUNT(*) FROM stock_prices_daily WHERE symbol=? AND close IS NOT NULL", (normalized,)).fetchone()
+    elif asset_type == "FX":
+        row = conn.execute("SELECT COUNT(*) FROM fx_rates WHERE base='USD' AND symbol=? AND rate IS NOT NULL", (normalized,)).fetchone()
+    elif asset_type == "CRYPTO":
+        row = conn.execute("SELECT COUNT(*) FROM crypto_prices_daily WHERE symbol=? AND price_usd IS NOT NULL", (normalized,)).fetchone()
+    elif asset_type == "MACRO":
+        row = conn.execute("SELECT COUNT(*) FROM macro_indicators_daily WHERE indicator_code=? AND value IS NOT NULL", (normalized,)).fetchone()
+    else:
+        return 0
+    return int(row[0] or 0)
+
+
+def _quote_count_for_health(conn: sqlite3.Connection, asset_type: str, symbol: str) -> int:
+    row = conn.execute(
+        "SELECT COUNT(*) FROM market_quotes_latest WHERE asset_type=? AND symbol=? AND price IS NOT NULL",
+        (asset_type, symbol.strip().upper()),
+    ).fetchone()
+    return int(row[0] or 0)
+
+
 
 def get_data_mode_summary(db_path: str) -> dict[str, Any]:
     path = Path(db_path).expanduser().resolve()
@@ -823,7 +1024,8 @@ def get_data_mode_summary(db_path: str) -> dict[str, Any]:
             coverage = {}
 
     record_modes = {mode for mode, count in data_mode_counts.items() if count > 0}
-    markers = providers.union(modes)
+    # Dataset mode reflects current records, not historical ingest run names.
+    markers = providers
     has_demo = "demo" in record_modes or any(_is_demo_marker(value) for value in markers)
     has_live = "live" in record_modes or any(value and not _is_demo_marker(value) for value in markers)
     has_unknown = "unknown" in record_modes and not (has_demo or has_live)
@@ -891,6 +1093,7 @@ def get_system_status(db_path: str) -> dict[str, Any]:
             "provider_summary": [],
             "data_mode_counts": {"demo": 0, "live": 0, "mixed": 0, "unknown": 0},
             "coverage": {},
+            "data_health": get_data_health(str(path)),
             "data_generated_at": None,
             "data_warning": "database not found",
         }
@@ -937,6 +1140,7 @@ def get_system_status(db_path: str) -> dict[str, Any]:
         "provider_summary": data_mode["provider_summary"],
         "data_mode_counts": data_mode["data_mode_counts"],
         "coverage": data_mode["coverage"],
+        "data_health": get_data_health(str(path)),
         "data_generated_at": data_mode["generated_at"],
         "data_warning": data_mode["warning"],
     }

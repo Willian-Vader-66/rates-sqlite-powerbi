@@ -2,10 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from fx_rates.config import DEFAULTS
 from fx_rates.dashboard_market_audit import audit_market
 from fx_rates.dashboard_prepare import run_prepare_demo_dashboard, run_prepare_live_dashboard
 from fx_rates.db_sqlite import (
+    commit_prepared_live_dataset,
+    get_data_health,
     get_data_mode_summary,
     get_system_status,
     initialize_schema,
@@ -232,6 +236,117 @@ def test_audit_market_detects_bad_stock_unit(tmp_path: Path) -> None:
     assert "STOCK_UNIT_SUSPICIOUS" in item["flags"]
 
 
+
+def _stock_history_count(db_path: str, symbol: str, mode: str | None = None) -> int:
+    import sqlite3
+
+    with sqlite3.connect(db_path) as conn:
+        if mode is None:
+            row = conn.execute("SELECT COUNT(*) FROM stock_prices_daily WHERE symbol=?", (symbol,)).fetchone()
+        else:
+            row = conn.execute("SELECT COUNT(*) FROM stock_prices_daily WHERE symbol=? AND data_mode=?", (symbol, mode)).fetchone()
+    return int(row[0] or 0)
+
+
+def test_placeholder_stock_key_is_invalid_and_preserves_demo(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("TWELVE_DATA_API_KEY", "SUA_CHAVE_AQUI")
+    payload = providers_status(DEFAULTS.__class__(**{**DEFAULTS.__dict__, "twelve_data_api_key": "SUA_CHAVE_AQUI"}))
+    stock = next(item for item in payload["providers"] if item["asset_type"] == "STOCK")
+    assert stock["key_present"] is True
+    assert stock["key_valid_format"] is False
+    assert stock["configured"] is False
+
+    db_path = str(tmp_path / "placeholder.sqlite")
+    demo_settings = _demo_settings(db_path, tmp_path)
+    live_settings = _twelvedata_settings(db_path, tmp_path, api_key="SUA_CHAVE_AQUI")
+    initialize_schema(db_path)
+    assert run_prepare_demo_dashboard(demo_settings, years=1, demo=True, symbols=["AAPL", "MSFT", "NVDA"], stock_limit=3) == 0
+    before = {symbol: _stock_history_count(db_path, symbol, "demo") for symbol in ("AAPL", "MSFT", "NVDA")}
+
+    code = run_prepare_live_dashboard(live_settings, years=1, asset_type="STOCK", symbols=["AAPL", "MSFT", "NVDA"], stock_limit=3, replace_demo=True)
+
+    assert code == 2
+    after = {symbol: _stock_history_count(db_path, symbol, "demo") for symbol in ("AAPL", "MSFT", "NVDA")}
+    assert after == before
+
+
+def test_prepare_live_missing_key_preserves_demo(tmp_path: Path) -> None:
+    db_path = str(tmp_path / "missing-key.sqlite")
+    demo_settings = _demo_settings(db_path, tmp_path)
+    live_settings = _twelvedata_settings(db_path, tmp_path, api_key="")
+    initialize_schema(db_path)
+    assert run_prepare_demo_dashboard(demo_settings, years=1, demo=True, symbols=["AAPL", "MSFT", "NVDA"], stock_limit=3) == 0
+    before = _stock_history_count(db_path, "AAPL", "demo")
+
+    code = run_prepare_live_dashboard(live_settings, years=1, asset_type="STOCK", symbols=["AAPL"], stock_limit=1, replace_demo=True)
+
+    assert code == 2
+    assert _stock_history_count(db_path, "AAPL", "demo") == before
+
+
+def test_prepare_live_provider_error_preserves_demo(monkeypatch, tmp_path: Path) -> None:
+    db_path = str(tmp_path / "provider-error.sqlite")
+    demo_settings = _demo_settings(db_path, tmp_path)
+    live_settings = _twelvedata_settings(db_path, tmp_path, api_key="valid-looking-key-12345")
+    initialize_schema(db_path)
+    assert run_prepare_demo_dashboard(demo_settings, years=1, demo=True, symbols=["AAPL", "MSFT", "NVDA"], stock_limit=3) == 0
+    before = {symbol: _stock_history_count(db_path, symbol, "demo") for symbol in ("AAPL", "MSFT", "NVDA")}
+
+    class FailingProvider:
+        name = "twelvedata"
+
+        def fetch_stock_daily(self, **_kwargs):
+            raise ValueError("**apikey** parameter is incorrect or not specified")
+
+    monkeypatch.setattr("fx_rates.dashboard_prepare.build_market_provider", lambda **_kwargs: FailingProvider())
+    code = run_prepare_live_dashboard(live_settings, years=1, asset_type="STOCK", symbols=["AAPL", "MSFT", "NVDA"], stock_limit=3, replace_demo=True)
+
+    assert code == 4
+    after = {symbol: _stock_history_count(db_path, symbol, "demo") for symbol in ("AAPL", "MSFT", "NVDA")}
+    assert after == before
+
+
+def test_commit_prepared_live_dataset_rolls_back_after_delete_failure(tmp_path: Path) -> None:
+    db_path = str(tmp_path / "rollback.sqlite")
+    demo_settings = _demo_settings(db_path, tmp_path)
+    initialize_schema(db_path)
+    assert run_prepare_demo_dashboard(demo_settings, years=1, demo=True, symbols=["AAPL"], stock_limit=1) == 0
+    before = _stock_history_count(db_path, "AAPL", "demo")
+
+    with pytest.raises(RuntimeError):
+        commit_prepared_live_dataset(
+            db_path,
+            instruments=[_instrument("AAPL", "fake_live", data_mode="live")],
+            stock_rows=[_stock_row("AAPL", "fake_live", data_mode="live")],
+            fx_rows=[],
+            crypto_rows=[],
+            macro_rows=[],
+            quote_rows=[_quote("AAPL", "fake_live", data_mode="live")],
+            analysis_rows=[],
+            replace_demo=True,
+            asset_types=["STOCK"],
+            symbols=["AAPL"],
+            simulate_failure_after_delete=True,
+        )
+
+    assert _stock_history_count(db_path, "AAPL", "demo") == before
+    assert _stock_history_count(db_path, "AAPL", "live") == 0
+
+
+def test_audit_market_reports_important_symbol_without_history(tmp_path: Path) -> None:
+    db_path = _db(tmp_path)
+    upsert_instruments(db_path, [_instrument("AAPL", "mock", data_mode="demo")])
+
+    audit = audit_market(db_path)
+    health = get_data_health(db_path)
+    item = next(row for row in audit["items"] if row["symbol"] == "AAPL")
+
+    assert health["status"] == "FAIL"
+    assert "STOCK:AAPL" in health["missing_important_symbols"]
+    assert "NO_HISTORY" in item["flags"]
+    assert "prepare-demo --years 4 --demo --symbols AAPL,MSFT,NVDA" in health["repair_command"]
+
+
 def _demo_settings(db_path: str, tmp_path: Path):
     return DEFAULTS.__class__(
         **{
@@ -243,6 +358,23 @@ def _demo_settings(db_path: str, tmp_path: Path):
             "max_retries": 0,
             "market_data_provider": "mock",
             "market_data_demo_mode": True,
+        }
+    )
+
+
+def _twelvedata_settings(db_path: str, tmp_path: Path, api_key: str):
+    return DEFAULTS.__class__(
+        **{
+            **DEFAULTS.__dict__,
+            "db_path": db_path,
+            "cache_dir": str(tmp_path / "cache"),
+            "log_file": str(tmp_path / "app.log"),
+            "timeout_seconds": 1,
+            "max_retries": 0,
+            "market_data_provider": "twelvedata",
+            "market_data_demo_mode": False,
+            "stock_provider": "twelvedata",
+            "twelve_data_api_key": api_key,
         }
     )
 

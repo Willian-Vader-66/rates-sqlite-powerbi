@@ -1,10 +1,28 @@
 from __future__ import annotations
 
-import os
+import re
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 from .config import Settings
+
+
+INVALID_KEY_MARKERS = {
+    "",
+    "none",
+    "null",
+    "sua_chave_aqui",
+    "your_key",
+    "your_api_key",
+    "your_twelve_data_api_key",
+    "change_me",
+    "changeme",
+    "todo",
+    "test",
+    "fake",
+    "demo",
+    "placeholder",
+}
 
 
 class ProviderContract(Protocol):
@@ -31,6 +49,8 @@ class ProviderStatus:
     available: bool
     status: str
     requires_api_key: bool
+    key_present: bool
+    key_valid_format: bool
     api_key_detected: bool
     missing_env: list[str]
     supported_assets: list[str]
@@ -46,6 +66,8 @@ class ProviderStatus:
             "available": self.available,
             "status": self.status,
             "requires_api_key": self.requires_api_key,
+            "key_present": self.key_present,
+            "key_valid_format": self.key_valid_format,
             "api_key_detected": self.api_key_detected,
             "missing_env": self.missing_env,
             "supported_assets": self.supported_assets,
@@ -61,22 +83,19 @@ def normalize_symbol(symbol: str) -> str:
 
 def providers_status(settings: Settings, *, test_external: bool = False) -> dict[str, Any]:
     statuses = [
-        _provider_status("FX", settings.fx_provider, requires_key=False, key_name=None, supported_symbols=_fx_symbols()),
-        _provider_status("CRYPTO", settings.crypto_provider, requires_key=False, key_name=None, supported_symbols=_crypto_symbols()),
-        _provider_status("STOCK", settings.stock_provider, requires_key=settings.stock_provider != "fake_live", key_name="TWELVE_DATA_API_KEY", supported_symbols=_stock_symbols()),
-        _provider_status("MACRO", settings.macro_provider, requires_key=settings.macro_provider == "fred", key_name="FRED_API_KEY", supported_symbols=_macro_symbols(settings.macro_provider)),
+        _provider_status("FX", settings.fx_provider, requires_key=False, key_name=None, api_key=settings.fx_api_key, supported_symbols=_fx_symbols()),
+        _provider_status("CRYPTO", settings.crypto_provider, requires_key=False, key_name=None, api_key=settings.crypto_api_key, supported_symbols=_crypto_symbols()),
+        _provider_status("STOCK", settings.stock_provider, requires_key=settings.stock_provider != "fake_live", key_name="TWELVE_DATA_API_KEY", api_key=settings.twelve_data_api_key, supported_symbols=_stock_symbols()),
+        _provider_status("MACRO", settings.macro_provider, requires_key=settings.macro_provider == "fred", key_name="FRED_API_KEY", api_key=settings.fred_api_key, supported_symbols=_macro_symbols(settings.macro_provider)),
     ]
     if test_external:
-        statuses = [
-            ProviderStatus(**{**status.as_dict(), "external_test": "not_implemented", "message": status.message or "External smoke test is intentionally not run by default."})
-            for status in statuses
-        ]
+        statuses = [_with_external_test(status, settings) for status in statuses]
     missing = [status for status in statuses if not status.configured]
     return {
         "providers": [status.as_dict() for status in statuses],
         "api_keys": {
-            "TWELVE_DATA_API_KEY": _key_detected("TWELVE_DATA_API_KEY"),
-            "FRED_API_KEY": _key_detected("FRED_API_KEY"),
+            "TWELVE_DATA_API_KEY": key_status(settings.twelve_data_api_key),
+            "FRED_API_KEY": key_status(settings.fred_api_key),
         },
         "external_test": "requested" if test_external else "skipped",
         "all_configured": not missing,
@@ -89,16 +108,23 @@ def print_providers_status(settings: Settings, *, test_external: bool = False) -
     print("PROVIDERS STATUS")
     for item in payload["providers"]:
         configured = "configured" if item["configured"] else "not_configured"
-        key = "key=yes" if item["api_key_detected"] else "key=no"
+        key = "key_present=yes" if item["key_present"] else "key_present=no"
         print(
             f"{item['asset_type']}: provider={item['provider']} status={configured} "
             f"available={str(item['available']).lower()} requires_api_key={str(item['requires_api_key']).lower()} "
-            f"missing_env={','.join(item['missing_env']) or '-'} {key} external_test={item['external_test']}"
+            f"missing_env={','.join(item['missing_env']) or '-'} {key} "
+            f"key_valid_format={str(item['key_valid_format']).lower()} external_test={item['external_test']}"
         )
         print(f"  supported_assets={','.join(item['supported_assets']) or '-'} supported_symbols={','.join(item['supported_symbols'][:20]) or '-'}")
         if item.get("message"):
             print(f"  {item['message']}")
-    print("API keys detected: " + ", ".join(f"{name}={'yes' if detected else 'no'}" for name, detected in payload["api_keys"].items()))
+    print(
+        "API keys detected: "
+        + ", ".join(
+            f"{name}=present:{str(info['present']).lower()},valid_format:{str(info['valid_format']).lower()}"
+            for name, info in payload["api_keys"].items()
+        )
+    )
     print("Recommendation: " + payload["recommendation"])
     return 0
 
@@ -109,10 +135,14 @@ def _provider_status(
     *,
     requires_key: bool,
     key_name: str | None,
+    api_key: str,
     supported_symbols: list[str],
 ) -> ProviderStatus:
     normalized = (provider or "none").strip().lower()
-    api_key_detected = _key_detected(key_name) if key_name else False
+    key_info = key_status(api_key)
+    key_present = key_info["present"] if key_name else False
+    key_valid_format = key_info["valid_format"] if key_name else True
+    api_key_detected = key_present and key_valid_format
     disabled = normalized in {"", "none", "disabled", "off"}
     missing_env = [key_name] if requires_key and key_name and not api_key_detected else []
     configured = not disabled and (api_key_detected if requires_key else True)
@@ -121,8 +151,10 @@ def _provider_status(
     message = None
     if disabled:
         message = f"{asset_type} provider disabled."
-    elif requires_key and not api_key_detected:
+    elif requires_key and not key_present:
         message = f"{key_name} not set; live {asset_type.lower()} ingestion is unavailable."
+    elif requires_key and not key_valid_format:
+        message = f"{key_name} is present but invalid or placeholder-like; live {asset_type.lower()} ingestion is unavailable."
     return ProviderStatus(
         asset_type=asset_type,
         provider=normalized,
@@ -130,6 +162,8 @@ def _provider_status(
         available=available,
         status=status,
         requires_api_key=requires_key,
+        key_present=key_present,
+        key_valid_format=key_valid_format,
         api_key_detected=api_key_detected,
         missing_env=missing_env,
         supported_assets=[asset_type],
@@ -138,8 +172,73 @@ def _provider_status(
     )
 
 
-def _key_detected(name: str | None) -> bool:
-    return bool(name and os.getenv(name, "").strip())
+def key_status(value: str | None) -> dict[str, bool]:
+    raw = "" if value is None else str(value)
+    stripped = raw.strip()
+    present = bool(stripped)
+    normalized = re.sub(r"[\s\-]+", "_", stripped.lower())
+    valid_format = present
+    if not present:
+        valid_format = False
+    elif stripped != raw or any(ch.isspace() for ch in stripped):
+        valid_format = False
+    elif normalized in INVALID_KEY_MARKERS:
+        valid_format = False
+    elif any(marker in normalized for marker in INVALID_KEY_MARKERS if marker):
+        valid_format = False
+    elif len(stripped) < 12:
+        valid_format = False
+    return {"present": present, "valid_format": valid_format}
+
+
+def _with_external_test(status: ProviderStatus, settings: Settings) -> ProviderStatus:
+    if not status.configured:
+        return ProviderStatus(**{**status.as_dict(), "external_test": "fail", "available": False})
+    if status.provider == "fake_live":
+        return ProviderStatus(**{**status.as_dict(), "external_test": "pass", "available": True})
+    try:
+        if status.asset_type == "STOCK":
+            from .market_providers import build_market_provider
+
+            provider = build_market_provider(
+                provider_name=settings.stock_provider,
+                api_key=settings.twelve_data_api_key,
+                demo_mode=False,
+                timeout_seconds=min(settings.timeout_seconds, 10),
+                max_retries=0,
+            )
+            quote = provider.fetch_quote("AAPL")
+            if quote.price is None or quote.price <= 0:
+                raise ValueError("invalid quote payload")
+        elif status.asset_type == "CRYPTO":
+            from .crypto_providers import build_crypto_provider, load_crypto_reference
+
+            asset = next(item for item in load_crypto_reference("data/reference/crypto_assets.csv") if item.symbol == "BTC")
+            quote = build_crypto_provider(False, min(settings.timeout_seconds, 10), 0).fetch_quote(asset)
+            if quote.price is None or quote.price <= 0:
+                raise ValueError("invalid crypto payload")
+        elif status.asset_type == "MACRO":
+            from .macro_providers import build_macro_provider, load_macro_reference
+
+            indicator = next(item for item in load_macro_reference("data/reference/macro_indicators.csv") if item.indicator_code == "SELIC_DAILY")
+            rows = build_macro_provider(False, min(settings.timeout_seconds, 10), 0).fetch_daily(indicator, "2026-01-01", "2026-01-10")
+            if not rows:
+                raise ValueError("empty macro payload")
+        elif status.asset_type == "FX":
+            from .api_frankfurter import FrankfurterClient
+
+            payload = FrankfurterClient(
+                base_url=settings.api_base_url,
+                cache_dir=settings.cache_dir,
+                timeout_seconds=min(settings.timeout_seconds, 10),
+                use_cache=False,
+                max_retries=0,
+            ).fetch_latest("USD", ["BRL", "EUR"])
+            if not payload.get("rates"):
+                raise ValueError("empty FX payload")
+        return ProviderStatus(**{**status.as_dict(), "external_test": "pass", "available": True, "message": status.message})
+    except Exception as exc:
+        return ProviderStatus(**{**status.as_dict(), "external_test": "fail", "available": False, "message": f"external test failed: {exc}"})
 
 
 def _recommendation(missing: list[ProviderStatus]) -> str:

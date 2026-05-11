@@ -9,6 +9,7 @@ from .config import Settings
 from .db_sqlite import insert_analysis_snapshots
 from .data_origin import canonical_record_mode
 from .models import AnalysisSnapshotRow
+from .models import CryptoPriceDailyRow, FxRateRow, MacroIndicatorDailyRow, StockPriceDailyRow
 from .utils import normalize_symbol_list, utc_now_iso
 
 VOLATILITY_THRESHOLD = 0.035
@@ -42,6 +43,88 @@ def build_analysis_snapshots(
     if normalized_type in {None, "MACRO"}:
         snapshots.extend(_build_macro_snapshots(db_path, symbols))
     return snapshots
+
+
+def build_analysis_snapshots_from_live_rows(
+    *,
+    stock_rows: list[StockPriceDailyRow],
+    fx_rows: list[FxRateRow],
+    crypto_rows: list[CryptoPriceDailyRow],
+    macro_rows: list[MacroIndicatorDailyRow],
+) -> list[AnalysisSnapshotRow]:
+    snapshots: list[AnalysisSnapshotRow] = []
+    for symbol, rows in _group_rows(stock_rows, lambda row: row.symbol).items():
+        points = [
+            {
+                "date": row.date,
+                "symbol": row.symbol,
+                "exchange": row.exchange,
+                "value": row.close,
+                "provider": row.provider,
+                "data_mode": row.data_mode,
+                "source_updated_at": row.source_updated_at,
+            }
+            for row in rows
+            if row.close is not None
+        ]
+        if points:
+            snapshots.append(_snapshot_from_series(symbol=symbol, asset_type="STOCK", exchange=points[-1]["exchange"], rows=points))
+    for key, rows in _group_rows(fx_rows, lambda row: f"{row.base}|{row.symbol}").items():
+        base, symbol = key.split("|", 1)
+        points = [
+            {
+                "date": row.date,
+                "symbol": row.symbol,
+                "exchange": row.base,
+                "value": row.rate,
+                "provider": row.source,
+                "data_mode": row.data_mode,
+                "source_updated_at": row.source_updated_at,
+            }
+            for row in rows
+        ]
+        if points:
+            snapshots.append(_snapshot_from_series(symbol=symbol, asset_type="FX", exchange=base, rows=points))
+    for symbol, rows in _group_rows(crypto_rows, lambda row: row.symbol).items():
+        points = [
+            {
+                "date": row.date,
+                "symbol": row.symbol,
+                "exchange": "CRYPTO",
+                "value": row.price_usd,
+                "provider": row.provider,
+                "data_mode": row.data_mode,
+                "source_updated_at": row.source_updated_at,
+            }
+            for row in rows
+            if row.price_usd is not None
+        ]
+        if points:
+            snapshots.append(_snapshot_from_series(symbol=symbol, asset_type="CRYPTO", exchange="CRYPTO", rows=points))
+    for symbol, rows in _group_rows(macro_rows, lambda row: row.indicator_code).items():
+        points = [
+            {
+                "date": row.date,
+                "symbol": row.indicator_code,
+                "exchange": "MACRO",
+                "value": row.value,
+                "provider": row.source,
+                "data_mode": row.data_mode,
+                "source_updated_at": row.source_updated_at,
+            }
+            for row in rows
+            if row.value is not None
+        ]
+        if points:
+            snapshots.append(_snapshot_from_series(symbol=symbol, asset_type="MACRO", exchange="MACRO", rows=points, macro=True))
+    return snapshots
+
+
+def _group_rows(rows: list[Any], key_func: Any) -> dict[str, list[Any]]:
+    grouped: dict[str, list[Any]] = {}
+    for row in rows:
+        grouped.setdefault(str(key_func(row)), []).append(row)
+    return grouped
 
 
 def _build_stock_snapshots(db_path: str, symbols: list[str] | None) -> list[AnalysisSnapshotRow]:

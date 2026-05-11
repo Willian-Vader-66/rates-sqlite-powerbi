@@ -79,7 +79,7 @@ def build_parser() -> argparse.ArgumentParser:
     providers = subparsers.add_parser("providers", help="Diagnosticar providers de dados de mercado")
     providers_sub = providers.add_subparsers(dest="providers_command", required=True)
     providers_status = providers_sub.add_parser("status", help="Mostrar providers configurados sem revelar chaves")
-    providers_status.add_argument("--test-external", action="store_true", help="Reservado para smoke test externo opt-in")
+    providers_status.add_argument("--external-test", "--test-external", dest="external_test", action="store_true", help="Executar smoke test externo opt-in dos providers")
     _add_common_flags(providers_status)
 
     instruments = subparsers.add_parser("instruments", help="Gerenciar instrumentos")
@@ -160,6 +160,7 @@ def build_parser() -> argparse.ArgumentParser:
     dashboard_prepare.add_argument("--crypto-reference", default="data/reference/crypto_assets.csv")
     dashboard_prepare.add_argument("--macro-reference", default="data/reference/macro_indicators.csv")
     dashboard_prepare.add_argument("--stock-limit", type=int, default=32)
+    dashboard_prepare.add_argument("--symbols", type=_symbols_arg, default=None, help="Preparar/reparar somente os simbolos informados")
     _add_common_flags(dashboard_prepare)
     dashboard_prepare_live = dashboard_sub.add_parser("prepare-live", help="Validar preparo de dados live sem misturar silenciosamente")
     dashboard_prepare_live.add_argument("--years", type=int, default=4)
@@ -218,7 +219,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "status":
         return run_status(settings=settings, last=args.last)
     if args.command == "providers" and args.providers_command == "status":
-        return print_providers_status(settings=settings, test_external=args.test_external)
+        return print_providers_status(settings=settings, test_external=args.external_test)
     if args.command == "instruments" and args.instruments_command == "import":
         return run_import_instruments(settings=settings, file_path=args.file)
     if args.command == "stocks" and args.stocks_command == "daily":
@@ -257,6 +258,7 @@ def main(argv: list[str] | None = None) -> int:
             crypto_reference=args.crypto_reference,
             macro_reference=args.macro_reference,
             stock_limit=args.stock_limit,
+            symbols=args.symbols,
         )
     if args.command == "dashboard" and args.dashboard_command == "prepare-live":
         return run_prepare_live_dashboard(

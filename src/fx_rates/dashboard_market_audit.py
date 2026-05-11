@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from .db_sqlite import get_data_mode_summary, get_performance_ranking
+from .db_sqlite import get_data_health, get_data_mode_summary, get_performance_ranking
 from .display_metadata import build_display_metadata
 
 FX_RANGES = {
@@ -50,7 +50,9 @@ def run_market_audit(db_path: str, *, with_live_sample: bool = False, output_jso
     audit = audit_market(db_path, with_live_sample=with_live_sample)
     print(json.dumps(audit, indent=2, ensure_ascii=False) if output_json else format_market_audit(audit))
     hard_fail_flags = {"NO_HISTORY", "NO_LATEST_QUOTE", "FX_SUSPICIOUS_RANGE", "STOCK_SUSPICIOUS_RANGE", "STOCK_UNIT_SUSPICIOUS", "CRYPTO_SUSPICIOUS_RANGE", "CRYPTO_UNIT_SUSPICIOUS", "MACRO_UNIT_SUSPICIOUS", "INCONSISTENT_30D_CHANGE", "INCONSISTENT_90D_CHANGE", "TOP_WORST_RANKING_BUG"}
-    return 1 if any(hard_fail_flags.intersection(item["flags"]) for item in audit.get("items", [])) else 0
+    has_item_failure = any(hard_fail_flags.intersection(item["flags"]) for item in audit.get("items", []))
+    has_health_failure = audit.get("data_health", {}).get("status") == "FAIL"
+    return 1 if has_item_failure or has_health_failure else 0
 
 
 def audit_market(db_path: str, *, with_live_sample: bool = False) -> dict[str, Any]:
@@ -69,6 +71,7 @@ def audit_market(db_path: str, *, with_live_sample: bool = False) -> dict[str, A
         totals = _totals(conn)
         date_range = _overall_range(conn)
     data_mode = get_data_mode_summary(str(path))
+    data_health = get_data_health(str(path))
     if data_mode["data_mode"] == "demo":
         for item in items:
             item["flags"].append("DEMO_DATA_PRESENT")
@@ -89,6 +92,7 @@ def audit_market(db_path: str, *, with_live_sample: bool = False) -> dict[str, A
         "items": items,
         "ranking": ranking,
         "live_validation": live_samples,
+        "data_health": data_health,
         "data_mode_breakdown": _data_mode_breakdown(items),
         "summary": _summary(items),
     }
@@ -130,7 +134,7 @@ def _audit_instrument(conn: sqlite3.Connection, instrument: dict[str, Any]) -> d
         flags.append("INCONSISTENT_30D_CHANGE")
     if _differs(change_90d, analysis.get("change_90d") if analysis else None):
         flags.append("INCONSISTENT_90D_CHANGE")
-    provider = latest.get("provider") or history.get("provider") or instrument.get("provider")
+    provider = (latest.get("provider") if latest else None) or history.get("provider") or instrument.get("provider")
     row_mode = (latest.get("data_mode") if latest else None) or history.get("data_mode") or instrument.get("data_mode")
     if not row_mode:
         row_mode = "demo" if _is_demo_provider(provider) else "unknown"
@@ -428,6 +432,7 @@ def format_market_audit(audit: dict[str, Any]) -> str:
         f"Data mode: {audit['data_mode']['data_mode'].upper()} providers={', '.join(audit['data_mode'].get('providers', [])) or '-'}",
         f"Data mode counts: {audit.get('data_mode_breakdown', {}).get('by_mode', {})}",
         f"Historical range: {audit['date_range']['date_min']} to {audit['date_range']['date_max']} ({audit['date_range']['historical_rows']} rows)",
+        f"Data health: {audit.get('data_health', {}).get('status', 'UNKNOWN')} missing_important={audit.get('data_health', {}).get('missing_important_symbols', [])}",
         f"Total instruments: {audit['summary']['total_instruments']}",
         "Flags: " + (", ".join(f"{k}={v}" for k, v in sorted(audit['summary']['flag_counts'].items())) or "none"),
         "",
@@ -439,6 +444,10 @@ def format_market_audit(audit: dict[str, Any]) -> str:
                 **{**item, "flags": ",".join(item["flags"]) or "OK"}
             )
         )
+    health = audit.get("data_health", {})
+    if health.get("status") in {"WARN", "FAIL"} and health.get("repair_command"):
+        lines.append("")
+        lines.append(f"Repair action: Run: {health['repair_command']}")
     live = audit.get("live_validation", {})
     lines.append("")
     lines.append(f"Live validation: {live.get('status')}")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import date, timedelta
 from statistics import pstdev
 from typing import Any
 
@@ -136,9 +137,9 @@ def _snapshot_from_series(
     last = values[-1]
     previous = values[-2] if len(values) >= 2 else None
     daily_return = _ratio_change(previous, last)
-    change_30d = _period_change(values, 30)
-    change_90d = _period_change(values, 90)
-    change_1y = _period_change(values, 252 if asset_type == "STOCK" else 365)
+    change_30d = _period_change(dated_values, 30)
+    change_90d = _period_change(dated_values, 90)
+    change_1y = _period_change(dated_values, 365)
     sma_20 = _mean(values[-20:]) if len(values) >= 20 else None
     sma_50 = _mean(values[-50:]) if len(values) >= 50 else None
     returns = _returns(values[-21:])
@@ -244,11 +245,19 @@ def _returns(values: list[float]) -> list[float]:
     return result
 
 
-def _period_change(values: list[float], offset: int) -> float | None:
-    if len(values) < 2:
+def _period_change(dated_values: list[tuple[str, float]], days: int) -> float | None:
+    valid = [(raw_date, value) for raw_date, value in dated_values if value not in (None, 0)]
+    if len(valid) < 2:
         return None
-    index = max(0, len(values) - offset - 1)
-    return _ratio_change(values[index], values[-1])
+    try:
+        end_date = date.fromisoformat(valid[-1][0])
+        cutoff = end_date - timedelta(days=days)
+        window = [(raw_date, value) for raw_date, value in valid if date.fromisoformat(raw_date) >= cutoff]
+    except ValueError:
+        window = []
+    if len(window) < 2:
+        window = valid
+    return _ratio_change(window[0][1], window[-1][1])
 
 
 def _ratio_change(start: float | None, end: float | None) -> float | None:

@@ -116,17 +116,19 @@ public class MarketDataService {
     }
 
     public List<PricePoint> getHistory(String assetType, String symbol, String base, LocalDate end, HistoryRange range) throws ApiException {
-        LocalDate start = range.startDate(end);
-        if ("FX".equalsIgnoreCase(assetType)) {
-            return getFxHistory(base == null || base.isBlank() ? "USD" : base, symbol, start, end);
+        Map<String, String> params = new LinkedHashMap<>();
+        params.put("period", range.label());
+        if (assetType != null && !assetType.isBlank()) {
+            params.put("asset_type", assetType);
         }
-        if ("CRYPTO".equalsIgnoreCase(assetType)) {
-            return getCryptoHistory(symbol, start, end);
+        if (base != null && !base.isBlank()) {
+            params.put("base", base);
         }
-        if ("MACRO".equalsIgnoreCase(assetType)) {
-            return getMacroHistory(symbol, start, end);
-        }
-        return getStockHistory(symbol, start, end);
+        return apiClient.getItems(
+                "/api/history/" + symbol,
+                params,
+                new TypeReference<>() {}
+        );
     }
 
     public enum HistoryRange {

@@ -8,6 +8,7 @@ from fx_rates.api_server import create_app
 from fx_rates.cli import main
 from fx_rates.config import DEFAULTS, Settings
 from fx_rates.dashboard_audit import audit_dashboard
+from fx_rates.dashboard_market_audit import audit_market
 
 
 def _settings(db_path: str) -> Settings:
@@ -111,3 +112,19 @@ def test_dashboard_display_metadata_is_explicit(monkeypatch, tmp_path: Path) -> 
     assert ranking["top"]
     assert ranking["bottom"]
     assert "technical_label" in ranking["top"][0]
+
+    system_status = client.get("/api/system/status").json()
+    assert system_status["data_mode"] == "demo"
+    assert "Values generated for UI testing" in system_status["data_warning"]
+
+    market_audit = audit_market(str(db_path), with_live_sample=False)
+    assert market_audit["data_mode"]["data_mode"] == "demo"
+    assert market_audit["summary"]["total_instruments"] == 68
+    assert market_audit["summary"]["without_history"] == 0
+    assert market_audit["summary"]["without_quote"] == 0
+    assert market_audit["ranking"]["status"] == "OK"
+
+    for symbol in ["BRL", "EUR", "BTC", "ETH", "AAPL", "SELIC_DAILY", "FED_FUNDS_DAILY"]:
+        generic_history = client.get(f"/api/history/{symbol}?period=90D").json()
+        assert generic_history["point_count"] > 0
+        assert generic_history["message"] is None

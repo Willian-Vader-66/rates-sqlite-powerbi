@@ -98,6 +98,7 @@ public class DashboardController {
     private final PeriodSelector overviewPeriod = new PeriodSelector(HistoryRange.NINETY_D);
     private final Label quoteDetails = new Label("Select an instrument to inspect the latest quote.");
     private final Label analysisDetails = new Label("Analysis snapshot will appear here.");
+    private final Label dataModeBadge = new Label("DATA MODE: UNKNOWN");
     private final VBox settingsPanel = new VBox(12);
     private final Label settingsConnection = new Label("-");
     private final Label settingsDatabase = new Label("-");
@@ -151,7 +152,8 @@ public class DashboardController {
         refreshButton.setOnAction(event -> refreshNow(true));
         pauseButton.getStyleClass().add("neon-button-secondary");
         pauseButton.setOnAction(event -> toggleAutoRefresh());
-        HBox actions = new HBox(10, refreshButton, pauseButton);
+        dataModeBadge.getStyleClass().addAll("data-mode-badge", "data-mode-unknown");
+        HBox actions = new HBox(10, dataModeBadge, refreshButton, pauseButton);
         actions.setAlignment(Pos.CENTER_RIGHT);
 
         HBox headerRow = new HBox(18, brand, statusBarController.getView(), actions);
@@ -264,7 +266,7 @@ public class DashboardController {
         GridPane detailGrid = new GridPane();
         detailGrid.setHgap(12);
         detailGrid.setVgap(12);
-        detailGrid.add(detailCard("Latest Quote", quoteDetails), 0, 0);
+        detailGrid.add(detailCard("Latest Value", quoteDetails), 0, 0);
         detailGrid.add(detailCard("Analysis", analysisDetails), 1, 0);
 
         VBox details = new VBox(12, titleRow, detailGrid, chartController.getView());
@@ -410,6 +412,7 @@ public class DashboardController {
         updateMarketOverview(data.marketOverview());
         updateFixedCharts(data.fixedCharts());
         updateTopStocks(data.topStocks());
+        updateDataModeBadge(data.systemStatus(), data.summary());
         updateSettings(data.systemStatus(), data.summary());
         List<MarketRow> rows = marketRows(data.instruments(), data.quotes(), data.analysis());
         updateTechnicalHighlights(rows);
@@ -724,11 +727,15 @@ public class DashboardController {
         MarketRow worst = stocks.stream().filter(row -> row.change30d() != null).min(Comparator.comparing(MarketRow::change30d)).orElse(null);
         MarketRow volatileStock = stocks.stream().filter(row -> row.volatility() != null).max(Comparator.comparing(MarketRow::volatility)).orElse(null);
 
+        String worstLabel = worst != null && worst.change30d() != null && worst.change30d() >= 0
+                ? "Weakest Stock " + overviewPeriod.getValue().label()
+                : "Worst Stock " + overviewPeriod.getValue().label();
+        String worstStyle = worst != null && worst.change30d() != null && worst.change30d() >= 0 ? null : "down";
         FlowPane cards = new FlowPane(12, 12,
                 metricCard("Active Stocks", FormatUtils.integer(data.summary().activeStocks()), "listed instruments", null),
                 metricCard("Latest Stock Quotes", FormatUtils.integer(stocks.stream().filter(row -> row.quote() != null).count()), "quotes loaded", null),
                 metricCard("Best Stock " + overviewPeriod.getValue().label(), best == null ? "-" : best.symbol(), best == null ? "-" : FormatUtils.percent(best.change30d()), "up"),
-                metricCard("Worst Stock " + overviewPeriod.getValue().label(), worst == null ? "-" : worst.symbol(), worst == null ? "-" : FormatUtils.percent(worst.change30d()), "down"),
+                metricCard(worstLabel, worst == null ? "-" : worst.symbol(), worst == null ? "-" : FormatUtils.percent(worst.change30d()), worstStyle),
                 metricCard("Most Volatile", volatileStock == null ? "-" : volatileStock.symbol(), volatileStock == null ? "-" : FormatUtils.percent(volatileStock.volatility()), null)
         );
 
@@ -1074,10 +1081,39 @@ public class DashboardController {
                 FormatUtils.integer(status.historicalRowCount())
         ));
         settingsCoverage.setText("History: %s to %s".formatted(FormatUtils.text(status.dateMin()), FormatUtils.text(status.dateMax())));
+        String dataMode = effectiveDataMode(status, summary);
+        String providers = status.providers() == null || status.providers().isEmpty() ? "-" : String.join(", ", status.providers());
         settingsRuntime.setText("""
-                Demo/live mode: backend-reported data source
+                Data mode: %s
+                Providers: %s
+                Data timestamp: %s
+                Warning: %s
                 Recommended prepare command: %s
-                """.formatted(FormatUtils.text(status.recommendedPrepareCommand())));
+                """.formatted(
+                dataMode.toUpperCase(),
+                providers,
+                FormatUtils.text(status.dataGeneratedAt()),
+                FormatUtils.text(status.dataWarning()),
+                FormatUtils.text(status.recommendedPrepareCommand())
+        ));
+    }
+
+    private void updateDataModeBadge(SystemStatus status, DashboardSummary summary) {
+        String mode = effectiveDataMode(status, summary);
+        dataModeBadge.setText(mode.toUpperCase() + " DATA");
+        dataModeBadge.getStyleClass().removeAll("data-mode-demo", "data-mode-live", "data-mode-mixed", "data-mode-unknown");
+        dataModeBadge.getStyleClass().add("data-mode-" + mode);
+    }
+
+    private String effectiveDataMode(SystemStatus status, DashboardSummary summary) {
+        String mode = status != null ? status.dataMode() : null;
+        if ((mode == null || mode.isBlank()) && summary != null) {
+            mode = summary.dataMode();
+        }
+        if (mode == null || mode.isBlank()) {
+            return "unknown";
+        }
+        return mode.trim().toLowerCase();
     }
 
     private void addStockCell(GridPane table, int col, int row, String text, String... styleClasses) {

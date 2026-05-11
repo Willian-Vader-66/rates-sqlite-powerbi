@@ -32,6 +32,8 @@ def build_display_metadata(
             quote_currency=quote,
             display_pair=pair,
             display_unit=unit_label,
+            unit_label=unit_label,
+            value_label="Exchange Rate",
             value_format="fx_rate",
             chart_title=f"{pair} Exchange Rate",
             chart_subtitle=unit_label,
@@ -51,6 +53,8 @@ def build_display_metadata(
             quote_currency="USD",
             display_pair=pair,
             display_unit="USD",
+            unit_label="USD",
+            value_label="Crypto Price",
             value_format="currency_usd",
             chart_title=f"{name} ({pair})",
             chart_subtitle="Crypto price in USD",
@@ -71,6 +75,8 @@ def build_display_metadata(
             quote_currency=None,
             display_pair=normalized_symbol,
             display_unit=macro_unit,
+            unit_label=macro_unit,
+            value_label=_macro_value_label(normalized_symbol, macro_unit),
             value_format="percent" if "%" in macro_unit else "index",
             chart_title=clean_title,
             chart_subtitle=_macro_subtitle(normalized_symbol, macro_unit),
@@ -90,6 +96,8 @@ def build_display_metadata(
         quote_currency=stock_currency,
         display_pair=pair,
         display_unit=stock_currency,
+        unit_label=stock_currency,
+        value_label="Stock Price",
         value_format="currency_usd" if stock_currency == "USD" else "currency",
         chart_title=f"{name} ({normalized_symbol})",
         chart_subtitle=f"Stock price in {stock_currency}",
@@ -164,3 +172,17 @@ def _macro_subtitle(symbol: str, unit: str) -> str:
     if "CPI" in symbol:
         return f"Index level ({unit})"
     return f"Annualized rate ({unit})"
+
+
+def _macro_value_label(symbol: str, unit: str) -> str:
+    if symbol == "SELIC_DAILY" or symbol == "CDI_DAILY":
+        return "Daily Rate"
+    if symbol == "SELIC_TARGET":
+        return "Target Rate"
+    if symbol == "IPCA_MONTHLY":
+        return "Monthly Inflation"
+    if "MONTHLY" in symbol and "ANNUALIZED" not in symbol:
+        return "Monthly Rate"
+    if "CPI" in symbol or unit == "index":
+        return "Index Level"
+    return "Annualized Rate"

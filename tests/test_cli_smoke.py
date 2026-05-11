@@ -58,13 +58,18 @@ def test_parser_accepts_commands_and_new_flags() -> None:
 
     audit_args = parser.parse_args(["dashboard", "audit", "--expected-years", "4"])
     assert audit_args.dashboard_command == "audit"
+
+    market_audit_args = parser.parse_args(["dashboard", "audit-market", "--with-live-sample"])
+    assert market_audit_args.dashboard_command == "audit-market"
+    assert market_audit_args.with_live_sample is True
     assert audit_args.expected_years == 4
 
 
 @patch("fx_rates.cli.run_status", return_value=0)
 def test_cli_status_smoke(mock_status, tmp_path: Path) -> None:
     db_path = str(tmp_path / "fx.sqlite")
-    code = main(["status", "--db-path", db_path, "--last", "3"])
+    log_file = str(tmp_path / "app.log")
+    code = main(["status", "--db-path", db_path, "--last", "3", "--log-file", log_file])
     assert code == 0
     assert mock_status.called
 

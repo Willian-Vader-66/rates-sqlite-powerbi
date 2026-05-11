@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,7 @@ from .db_sqlite import (
     get_performance_ranking,
     get_stock_history,
     get_system_status,
+    get_data_mode_summary,
     get_technical_highlights,
     get_top_stocks_30d,
     period_to_days,
@@ -48,11 +50,16 @@ def create_app(settings: Settings) -> FastAPI:
                 "configured": False,
                 "error": str(exc),
             }
+        data_mode = get_data_mode_summary(settings.db_path)
         return {
             "status": "ok",
             "db_path": settings.db_path,
             "db_exists": Path(settings.db_path).exists(),
             "provider": provider_status,
+            "data_mode": data_mode["data_mode"],
+            "providers": data_mode["providers"],
+            "data_generated_at": data_mode["generated_at"],
+            "data_warning": data_mode["warning"],
         }
 
     @app.get("/api/system/status")
@@ -87,6 +94,37 @@ def create_app(settings: Settings) -> FastAPI:
     def macro_history(indicator_code: str, start: str | None = None, end: str | None = None) -> dict[str, Any]:
         rows = get_macro_history(settings.db_path, indicator_code=indicator_code, start=start, end=end)
         return _history_response(rows, symbol=indicator_code, asset_type="MACRO", start=start, end=end)
+
+    @app.get("/api/history/{symbol}")
+    def generic_history(
+        symbol: str,
+        period: str | None = "90D",
+        asset_type: str | None = None,
+        base: str | None = None,
+        start: str | None = None,
+        end: str | None = None,
+    ) -> dict[str, Any]:
+        resolved = _resolve_history_target(settings.db_path, symbol=symbol, asset_type=asset_type, base=base)
+        requested_start, requested_end = _period_bounds(period, start, end)
+        if resolved["asset_type"] == "FX":
+            rows = get_fx_history(settings.db_path, base=resolved.get("base") or "USD", symbol=resolved["symbol"], start=requested_start, end=requested_end)
+        elif resolved["asset_type"] == "CRYPTO":
+            rows = get_crypto_history(settings.db_path, symbol=resolved["symbol"], start=requested_start, end=requested_end)
+        elif resolved["asset_type"] == "MACRO":
+            rows = get_macro_history(settings.db_path, indicator_code=resolved["symbol"], start=requested_start, end=requested_end)
+        else:
+            rows = get_stock_history(settings.db_path, symbol=resolved["symbol"], start=requested_start, end=requested_end)
+        response = _history_response(
+            rows,
+            symbol=resolved["symbol"],
+            asset_type=resolved["asset_type"],
+            base=resolved.get("base"),
+            start=requested_start,
+            end=requested_end,
+        )
+        response["requested_symbol"] = symbol.strip().upper()
+        response["resolved_symbol"] = resolved["symbol"]
+        return response
 
     @app.get("/api/quotes/latest")
     def quotes_latest(symbols: str | None = None, asset_type: str | None = None) -> dict[str, Any]:
@@ -149,6 +187,51 @@ def create_app(settings: Settings) -> FastAPI:
 
     return app
 
+
+
+def _resolve_history_target(
+    db_path: str,
+    *,
+    symbol: str,
+    asset_type: str | None = None,
+    base: str | None = None,
+) -> dict[str, Any]:
+    raw = symbol.strip().upper()
+    normalized_type = asset_type.strip().upper() if asset_type else None
+    if "/" in raw:
+        left, right = [part.strip().upper() for part in raw.split("/", 1)]
+        if left == "USD":
+            raw = right
+            normalized_type = normalized_type or "FX"
+            base = base or left
+        elif right == "USD":
+            raw = left
+            normalized_type = normalized_type or "CRYPTO"
+
+    aliases = {"BRL": ("FX", "BRL", "USD"), "EUR": ("FX", "EUR", "USD"), "BTC": ("CRYPTO", "BTC", None), "ETH": ("CRYPTO", "ETH", None)}
+    if normalized_type is None and raw in aliases:
+        alias_type, alias_symbol, alias_base = aliases[raw]
+        normalized_type = alias_type
+        raw = alias_symbol
+        base = base or alias_base
+
+    candidates = list_instruments(db_path, asset_type=normalized_type, active=True, search=raw)
+    exact = [row for row in candidates if str(row.get("symbol", "")).upper() == raw]
+    row = exact[0] if exact else candidates[0] if candidates else None
+    if row:
+        resolved_type = str(row.get("asset_type") or normalized_type or "STOCK").upper()
+        resolved_base = base or (row.get("exchange") if resolved_type == "FX" else None)
+        return {"asset_type": resolved_type, "symbol": str(row.get("symbol") or raw).upper(), "base": resolved_base}
+    return {"asset_type": normalized_type or "STOCK", "symbol": raw, "base": base}
+
+
+def _period_bounds(period: str | None, start: str | None, end: str | None) -> tuple[str | None, str | None]:
+    if start or end:
+        return start, end
+    period_label, days = period_to_days(period, default=90)
+    requested_end = date.today()
+    requested_start = requested_end - timedelta(days=days)
+    return requested_start.isoformat(), requested_end.isoformat()
 
 def _split_optional(raw: str | None) -> list[str] | None:
     if raw is None or not raw.strip():
@@ -225,6 +308,8 @@ def _metadata_from_rows(
                 "quote_currency",
                 "display_pair",
                 "display_unit",
+                "unit_label",
+                "value_label",
                 "value_format",
                 "chart_title",
                 "chart_subtitle",

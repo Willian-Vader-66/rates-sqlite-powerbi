@@ -32,3 +32,9 @@ logs/*.log
 .idea/
 
 .readiness-venv/
+src/*.egg-info/
+logs/
+*.log
+target/
+*.sqlite
+*.sqlite-*

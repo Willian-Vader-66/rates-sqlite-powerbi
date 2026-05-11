@@ -3,6 +3,8 @@ package com.example.financedashboard.model;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+import java.util.List;
+
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record SystemStatus(
         @JsonProperty("db_path") String dbPath,
@@ -20,6 +22,10 @@ public record SystemStatus(
         @JsonProperty("date_max") String dateMax,
         @JsonProperty("is_empty") Boolean empty,
         @JsonProperty("recommended_prepare_command") String recommendedPrepareCommand,
+        @JsonProperty("data_mode") String dataMode,
+        List<String> providers,
+        @JsonProperty("data_generated_at") String dataGeneratedAt,
+        @JsonProperty("data_warning") String dataWarning,
         String message
 ) {
 }

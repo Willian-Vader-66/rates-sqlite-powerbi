@@ -576,6 +576,88 @@ def deduplicate_dashboard_records(db_path: str) -> None:
         conn.commit()
 
 
+
+def get_data_mode_summary(db_path: str) -> dict[str, Any]:
+    path = Path(db_path).expanduser().resolve()
+    if not path.exists():
+        return {
+            "data_mode": "unknown",
+            "providers": [],
+            "generated_at": None,
+            "warning": "database not found",
+        }
+
+    providers: set[str] = set()
+    modes: set[str] = set()
+    timestamps: list[str] = []
+    with sqlite3.connect(str(path)) as conn:
+        conn.row_factory = sqlite3.Row
+        for sql in (
+            "SELECT DISTINCT provider AS value FROM instruments WHERE provider IS NOT NULL AND provider <> ''",
+            "SELECT DISTINCT provider AS value FROM market_quotes_latest WHERE provider IS NOT NULL AND provider <> ''",
+            "SELECT DISTINCT provider AS value FROM stock_prices_daily WHERE provider IS NOT NULL AND provider <> ''",
+            "SELECT DISTINCT source AS value FROM fx_rates WHERE source IS NOT NULL AND source <> ''",
+            "SELECT DISTINCT provider AS value FROM crypto_prices_daily WHERE provider IS NOT NULL AND provider <> ''",
+            "SELECT DISTINCT source AS value FROM macro_indicators_daily WHERE source IS NOT NULL AND source <> ''",
+        ):
+            try:
+                for row in conn.execute(sql).fetchall():
+                    providers.add(str(row["value"]))
+            except sqlite3.Error:
+                continue
+        try:
+            for row in conn.execute("SELECT DISTINCT mode AS value FROM ingest_runs WHERE mode IS NOT NULL AND mode <> ''").fetchall():
+                modes.add(str(row["value"]))
+            for row in conn.execute("SELECT finished_at FROM ingest_runs WHERE finished_at IS NOT NULL AND finished_at <> '' ORDER BY run_id DESC LIMIT 5").fetchall():
+                timestamps.append(str(row["finished_at"]))
+        except sqlite3.Error:
+            pass
+        for sql in (
+            "SELECT MAX(fetched_at) FROM market_quotes_latest",
+            "SELECT MAX(fetched_at) FROM stock_prices_daily",
+            "SELECT MAX(fetched_at) FROM fx_rates",
+            "SELECT MAX(fetched_at) FROM crypto_prices_daily",
+            "SELECT MAX(fetched_at) FROM macro_indicators_daily",
+            "SELECT MAX(generated_at) FROM analysis_snapshots",
+        ):
+            try:
+                value = conn.execute(sql).fetchone()[0]
+                if value:
+                    timestamps.append(str(value))
+            except sqlite3.Error:
+                continue
+
+    markers = providers.union(modes)
+    has_demo = any(_is_demo_marker(value) for value in markers)
+    has_live = any(value and not _is_demo_marker(value) for value in markers)
+    if has_demo and has_live:
+        data_mode = "mixed"
+    elif has_demo:
+        data_mode = "demo"
+    elif has_live:
+        data_mode = "live"
+    else:
+        data_mode = "unknown"
+    warning = None
+    if data_mode == "demo":
+        warning = "Values generated for UI testing. Do not compare with market."
+    elif data_mode == "mixed":
+        warning = "Dataset mixes demo and live/provider-sourced records."
+    return {
+        "data_mode": data_mode,
+        "providers": sorted(providers),
+        "ingest_modes": sorted(modes),
+        "generated_at": max(timestamps) if timestamps else None,
+        "warning": warning,
+    }
+
+
+def _is_demo_marker(value: str | None) -> bool:
+    if not value:
+        return False
+    normalized = str(value).strip().lower()
+    return "demo" in normalized or "mock" in normalized or "synthetic" in normalized
+
 def get_system_status(db_path: str) -> dict[str, Any]:
     path = Path(db_path).expanduser().resolve()
     db_exists = path.exists()
@@ -600,8 +682,14 @@ def get_system_status(db_path: str) -> dict[str, Any]:
             "is_empty": True,
             "message": "No data loaded. Run prepare-demo.",
             "recommended_prepare_command": PREPARE_COMMAND,
+            "data_mode": "unknown",
+            "providers": [],
+            "provider_summary": [],
+            "data_generated_at": None,
+            "data_warning": "database not found",
         }
 
+    data_mode = get_data_mode_summary(str(path))
     summary = get_dashboard_summary(str(path))
     with sqlite3.connect(str(path)) as conn:
         historical_row_count = sum(
@@ -638,6 +726,11 @@ def get_system_status(db_path: str) -> dict[str, Any]:
         "date_max": max(date_max_values) if date_max_values else None,
         "is_empty": is_empty,
         "recommended_prepare_command": PREPARE_COMMAND,
+        "data_mode": data_mode["data_mode"],
+        "providers": data_mode["providers"],
+        "provider_summary": data_mode["providers"],
+        "data_generated_at": data_mode["generated_at"],
+        "data_warning": data_mode["warning"],
     }
     if is_empty:
         status["message"] = "No data loaded. Run prepare-demo."
@@ -926,6 +1019,7 @@ def get_dashboard_summary(db_path: str) -> dict[str, Any]:
         "instruments_without_analysis": int(instruments_without_analysis),
         "instruments_without_quotes": int(instruments_without_quotes),
         "message": DASHBOARD_EMPTY_MESSAGE if int(total_instruments) == 0 else None,
+        **get_data_mode_summary(db_path),
     }
 
 
@@ -1135,10 +1229,19 @@ def get_performance_ranking(
         rows.append(_with_technical_summary(item))
     ranked = sorted(rows, key=lambda item: item.get("period_change") if item.get("period_change") is not None else -999, reverse=True)
     bottom = sorted(rows, key=lambda item: item.get("period_change") if item.get("period_change") is not None else 999)
+    period_label = (period or f"{days}D").strip().upper()
+    changes = [float(item["period_change"]) for item in rows if item.get("period_change") is not None]
+    all_positive = bool(changes) and all(value >= 0 for value in changes)
+    all_negative = bool(changes) and all(value < 0 for value in changes)
+    top_label = f"Least negative {period_label}" if all_negative else f"Top {period_label}"
+    bottom_label = f"Weakest {period_label}" if all_positive else f"Worst {period_label}"
     return {
-        "period": (period or f"{days}D").strip().upper(),
+        "period": period_label,
         "asset_type": normalized_type or "ALL",
         "count": len(rows),
+        "top_label": top_label,
+        "bottom_label": bottom_label,
+        "ranking_context": "all_positive" if all_positive else "all_negative" if all_negative else "mixed",
         "top": ranked[:limit],
         "bottom": bottom[:limit],
         "items": ranked,

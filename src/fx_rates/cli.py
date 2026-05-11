@@ -6,6 +6,7 @@ from .analysis import run_analyze_now
 from .config import ensure_runtime_dirs, load_settings
 from .crypto_ingest import run_crypto_backfill, run_crypto_daily, run_crypto_quotes
 from .dashboard_audit import run_dashboard_audit
+from .dashboard_market_audit import run_market_audit
 from .dashboard_prepare import run_prepare_demo_dashboard
 from .db_sqlite import initialize_schema
 from .ingest import run_backfill, run_daily, run_status
@@ -156,6 +157,10 @@ def build_parser() -> argparse.ArgumentParser:
     dashboard_audit = dashboard_sub.add_parser("audit", help="Auditar prontidao dos dados do dashboard")
     dashboard_audit.add_argument("--expected-years", type=int, default=4)
     _add_common_flags(dashboard_audit)
+    dashboard_market_audit = dashboard_sub.add_parser("audit-market", help="Auditar consistencia semantica dos dados de mercado")
+    dashboard_market_audit.add_argument("--with-live-sample", action="store_true", help="Comparar amostras com fontes publicas quando disponiveis")
+    dashboard_market_audit.add_argument("--json", action="store_true", help="Emitir resultado em JSON")
+    _add_common_flags(dashboard_market_audit)
 
     serve = subparsers.add_parser("serve", help="Iniciar API HTTP local")
     serve.add_argument("--host", default=None)
@@ -234,6 +239,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "dashboard" and args.dashboard_command == "audit":
         return run_dashboard_audit(settings.db_path, expected_years=args.expected_years)
+    if args.command == "dashboard" and args.dashboard_command == "audit-market":
+        return run_market_audit(settings.db_path, with_live_sample=args.with_live_sample, output_json=args.json)
     if args.command == "serve":
         from .api_server import create_app
         from .db_sqlite import get_system_status

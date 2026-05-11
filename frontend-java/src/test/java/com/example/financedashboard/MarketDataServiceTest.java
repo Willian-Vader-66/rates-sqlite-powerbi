@@ -30,22 +30,22 @@ class MarketDataServiceTest {
         LocalDate end = LocalDate.of(2026, 5, 3);
 
         service.getHistory("STOCK", "AAPL", null, end, HistoryRange.FOUR_Y);
-        assertEquals("/api/stocks/history", client.path);
-        assertEquals("AAPL", client.params.get("symbol"));
-        assertEquals("2022-05-03", client.params.get("start"));
+        assertEquals("/api/history/AAPL", client.path);
+        assertEquals("STOCK", client.params.get("asset_type"));
+        assertEquals("4Y", client.params.get("period"));
 
         service.getHistory("FX", "EUR", "USD", end, HistoryRange.FOUR_Y);
-        assertEquals("/api/fx/history", client.path);
+        assertEquals("/api/history/EUR", client.path);
+        assertEquals("FX", client.params.get("asset_type"));
         assertEquals("USD", client.params.get("base"));
-        assertEquals("EUR", client.params.get("symbol"));
 
         service.getHistory("CRYPTO", "BTC", null, end, HistoryRange.FOUR_Y);
-        assertEquals("/api/crypto/history", client.path);
-        assertEquals("BTC", client.params.get("symbol"));
+        assertEquals("/api/history/BTC", client.path);
+        assertEquals("CRYPTO", client.params.get("asset_type"));
 
         service.getHistory("MACRO", "SELIC_DAILY", null, end, HistoryRange.FOUR_Y);
-        assertEquals("/api/macro/history", client.path);
-        assertEquals("SELIC_DAILY", client.params.get("indicator_code"));
+        assertEquals("/api/history/SELIC_DAILY", client.path);
+        assertEquals("MACRO", client.params.get("asset_type"));
     }
 
     private static final class CapturingApiClient extends ApiClient {

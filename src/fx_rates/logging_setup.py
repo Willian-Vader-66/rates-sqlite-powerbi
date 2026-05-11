@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import logging
 
@@ -42,9 +42,14 @@ def setup_logging(log_level: str, log_file: str) -> None:
     console_handler.setFormatter(formatter)
     console_handler.addFilter(context_filter)
 
-    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    root.addHandler(console_handler)
+
+    try:
+        file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    except OSError as exc:
+        root.warning("File logging disabled for %s: %s", log_file, exc)
+        return
+
     file_handler.setFormatter(formatter)
     file_handler.addFilter(context_filter)
-
-    root.addHandler(console_handler)
     root.addHandler(file_handler)

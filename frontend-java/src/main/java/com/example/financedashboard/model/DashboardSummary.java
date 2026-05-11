@@ -3,6 +3,8 @@ package com.example.financedashboard.model;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+import java.util.List;
+
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record DashboardSummary(
         @JsonProperty("total_instruments") Integer totalInstruments,
@@ -15,7 +17,11 @@ public record DashboardSummary(
         @JsonProperty("instruments_without_analysis") Integer instrumentsWithoutAnalysis,
         @JsonProperty("instruments_without_quotes") Integer instrumentsWithoutQuotes,
         @JsonProperty("last_successful_ingest_run") IngestRun lastSuccessfulIngestRun,
-        @JsonProperty("failed_runs_count") Integer failedRunsCount
+        @JsonProperty("failed_runs_count") Integer failedRunsCount,
+        @JsonProperty("data_mode") String dataMode,
+        List<String> providers,
+        @JsonProperty("generated_at") String generatedAt,
+        String warning
 ) {
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record IngestRun(

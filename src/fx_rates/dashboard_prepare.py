@@ -82,7 +82,7 @@ def run_prepare_demo_dashboard(
 
     effective_settings = replace(settings, market_data_demo_mode=True, market_data_provider="mock") if demo else settings
     end_day = date.today()
-    start_day = end_day - timedelta(days=years * 365)
+    start_day = end_day - timedelta(days=(years * 366) + 7)
     start = start_day.isoformat()
     end = end_day.isoformat()
 

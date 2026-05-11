@@ -24,8 +24,55 @@ public record SystemStatus(
         @JsonProperty("recommended_prepare_command") String recommendedPrepareCommand,
         @JsonProperty("data_mode") String dataMode,
         List<String> providers,
+        @JsonProperty("provider_summary") List<ProviderSummary> providerSummary,
+        Coverage coverage,
+        @JsonProperty("data_mode_counts") DataModeCounts dataModeCounts,
+        @JsonProperty("live_provider_status") LiveProviderStatus liveProviderStatus,
         @JsonProperty("data_generated_at") String dataGeneratedAt,
         @JsonProperty("data_warning") String dataWarning,
         String message
 ) {
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record ProviderSummary(
+            @JsonProperty("asset_type") String assetType,
+            List<String> providers
+    ) {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record Coverage(
+            @JsonProperty("date_min") String dateMin,
+            @JsonProperty("date_max") String dateMax,
+            @JsonProperty("historical_rows") Integer historicalRows
+    ) {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record DataModeCounts(
+            Integer demo,
+            Integer live,
+            Integer mixed,
+            Integer unknown
+    ) {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record LiveProviderStatus(
+            List<ProviderItem> providers,
+            @JsonProperty("all_configured") Boolean allConfigured,
+            String recommendation
+    ) {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record ProviderItem(
+            @JsonProperty("asset_type") String assetType,
+            String provider,
+            Boolean configured,
+            Boolean available,
+            @JsonProperty("missing_env") List<String> missingEnv,
+            @JsonProperty("supported_symbols") List<String> supportedSymbols,
+            String message
+    ) {
+    }
 }

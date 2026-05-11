@@ -6,10 +6,13 @@ from dataclasses import replace
 from datetime import date, timedelta
 from typing import Iterable
 
+from .api_frankfurter import FrankfurterClient, normalize_timeseries
 from .analysis import build_analysis_snapshots
 from .config import Settings
-from .crypto_providers import CryptoAssetConfig, build_crypto_provider, load_crypto_reference
+from .crypto_providers import CryptoAssetConfig, MockCryptoProvider, build_crypto_provider, load_crypto_reference
 from .db_sqlite import (
+    delete_records_by_data_mode,
+    get_data_mode_summary,
     get_dashboard_summary,
     get_system_status,
     finish_ingest_run,
@@ -23,8 +26,8 @@ from .db_sqlite import (
     upsert_market_quotes_latest,
     upsert_stock_prices_daily,
 )
-from .macro_providers import MacroIndicatorConfig, build_macro_provider, load_macro_reference
-from .market_providers import build_market_provider
+from .macro_providers import MacroIndicatorConfig, MockMacroProvider, build_macro_provider, load_macro_reference
+from .market_providers import MockMarketDataProvider, build_market_provider
 from .models import (
     CryptoPriceDailyRow,
     FxRateRow,
@@ -33,7 +36,8 @@ from .models import (
     MarketQuoteRow,
     StockPriceDailyRow,
 )
-from .utils import utc_now_iso
+from .provider_status import providers_status
+from .utils import normalize_symbol_list, utc_now_iso
 from .watchlist import load_currency_reference, load_stock_watchlist
 
 DEFAULT_DASHBOARD_STOCK_REFERENCE = "data/reference/top100_stocks.csv"
@@ -116,6 +120,385 @@ def run_prepare_demo_dashboard(
     except Exception as exc:
         finish_ingest_run(settings.db_path, run_id, status="FAIL", row_count=0, error=str(exc))
         raise
+
+
+def run_prepare_live_dashboard(
+    settings: Settings,
+    years: int = 4,
+    allow_mixed: bool = False,
+    replace_demo: bool = False,
+    symbols: list[str] | None = None,
+    asset_type: str | None = None,
+    stock_reference: str = DEFAULT_DASHBOARD_STOCK_REFERENCE,
+    currency_reference: str = DEFAULT_CURRENCY_REFERENCE,
+    crypto_reference: str = DEFAULT_CRYPTO_REFERENCE,
+    macro_reference: str = DEFAULT_MACRO_REFERENCE,
+    stock_limit: int = 32,
+) -> int:
+    if years <= 0:
+        raise ValueError("--years deve ser maior que zero")
+    if stock_limit <= 0:
+        raise ValueError("--stock-limit deve ser maior que zero")
+
+    selected_asset_types = _selected_asset_types(asset_type)
+    selected_symbols = normalize_symbol_list(symbols) if symbols else None
+    provider_state = providers_status(settings, test_external=False)
+    missing = [
+        item for item in provider_state["providers"]
+        if item["asset_type"] in selected_asset_types and not item["configured"]
+    ]
+    if missing:
+        print("prepare-live cannot continue: live providers are not fully configured.")
+        for item in missing:
+            missing_env = ",".join(item.get("missing_env") or []) or "-"
+            print(f"{item['asset_type']}: provider={item['provider']} status=not_configured missing_env={missing_env} message={item.get('message')}")
+        print("Run: python -m fx_rates providers status")
+        print("Demo remains available with: python -m fx_rates dashboard prepare-demo --years 4 --demo")
+        return 2
+
+    data_mode = get_data_mode_summary(settings.db_path)
+    current_mode = data_mode["data_mode"]
+    if current_mode == "demo" and not (allow_mixed or replace_demo):
+        print("prepare-live stopped: current SQLite dataset contains demo data.")
+        print("Use --replace-demo to replace demo data, or --allow-mixed to explicitly allow a mixed dataset.")
+        return 3
+    if current_mode == "mixed" and not allow_mixed:
+        print("prepare-live stopped: current SQLite dataset is already mixed.")
+        print("Use --allow-mixed after reviewing: python -m fx_rates dashboard audit-market")
+        return 3
+
+    end_day = date.today()
+    start_day = end_day - timedelta(days=(years * 366) + 7)
+    start = start_day.isoformat()
+    end = end_day.isoformat()
+    print("Preparing LIVE dashboard data")
+    print(f"SQLite DB path: {get_system_status(settings.db_path)['db_path']}")
+    print(f"Asset types: {', '.join(selected_asset_types)}")
+    print(f"Symbols: {', '.join(selected_symbols) if selected_symbols else 'reference defaults'}")
+
+    run_id = start_ingest_run(
+        db_path=settings.db_path,
+        mode="dashboard_prepare_live",
+        base="LIV",
+        symbols=selected_symbols or selected_asset_types,
+        start=start,
+        end=end,
+    )
+    try:
+        deleted = 0
+        if replace_demo:
+            deleted = delete_records_by_data_mode(
+                settings.db_path,
+                "demo",
+                asset_types=selected_asset_types,
+                symbols=selected_symbols,
+            )
+            print(f"Deleted demo rows before live ingest: {deleted}")
+
+        row_count = 0
+        failures: list[str] = []
+        if "STOCK" in selected_asset_types:
+            count, asset_failures = _prepare_live_stocks(settings, stock_reference, start, end, stock_limit, selected_symbols, allow_mixed)
+            row_count += count
+            failures.extend(asset_failures)
+        if "FX" in selected_asset_types:
+            count, asset_failures = _prepare_live_fx(settings, currency_reference, start_day, end_day, selected_symbols, allow_mixed)
+            row_count += count
+            failures.extend(asset_failures)
+        if "CRYPTO" in selected_asset_types:
+            count, asset_failures = _prepare_live_crypto(settings, crypto_reference, start, end, selected_symbols, allow_mixed)
+            row_count += count
+            failures.extend(asset_failures)
+        if "MACRO" in selected_asset_types:
+            count, asset_failures = _prepare_live_macro(settings, macro_reference, start, end, selected_symbols, allow_mixed)
+            row_count += count
+            failures.extend(asset_failures)
+
+        if failures and not allow_mixed:
+            message = "prepare-live stopped before partial write; unsupported or failed live symbols: " + "; ".join(failures)
+            print(message)
+            finish_ingest_run(settings.db_path, run_id, status="FAIL", row_count=0, error=message)
+            return 4
+        if row_count <= 0:
+            message = "prepare-live did not load any live rows. Check provider configuration, network, and symbol support."
+            print(message)
+            finish_ingest_run(settings.db_path, run_id, status="FAIL", row_count=0, error=message)
+            return 5
+
+        deduplicate_dashboard_records(settings.db_path)
+        snapshots = build_analysis_snapshots(settings.db_path, symbols=selected_symbols, asset_type=asset_type)
+        row_count += insert_analysis_snapshots(settings.db_path, snapshots)
+        deduplicate_dashboard_records(settings.db_path)
+
+        finish_ingest_run(
+            settings.db_path,
+            run_id,
+            status="OK" if not failures else "WARN",
+            row_count=row_count,
+            error="; ".join(failures) if failures else None,
+        )
+        _print_readiness_summary(settings.db_path)
+        if failures:
+            print("Live ingest completed with explicit mixed/unsupported warnings:")
+            for failure in failures:
+                print(f"  {failure}")
+        return 0
+    except Exception as exc:
+        message = f"prepare-live failed: {exc}"
+        print(message)
+        finish_ingest_run(settings.db_path, run_id, status="FAIL", row_count=0, error=message)
+        return 6
+
+
+def _selected_asset_types(asset_type: str | None) -> list[str]:
+    if not asset_type or asset_type.strip().upper() == "ALL":
+        return ["STOCK", "FX", "CRYPTO", "MACRO"]
+    normalized = asset_type.strip().upper()
+    if normalized not in {"STOCK", "FX", "CRYPTO", "MACRO"}:
+        raise ValueError("--asset-type deve ser STOCK, FX, CRYPTO, MACRO ou ALL")
+    return [normalized]
+
+
+def _prepare_live_stocks(
+    settings: Settings,
+    reference: str,
+    start: str,
+    end: str,
+    stock_limit: int,
+    symbols: list[str] | None,
+    allow_partial: bool,
+) -> tuple[int, list[str]]:
+    provider = MockMarketDataProvider() if settings.stock_provider == "fake_live" else build_market_provider(
+        provider_name=settings.stock_provider,
+        api_key=settings.twelve_data_api_key,
+        demo_mode=False,
+        timeout_seconds=settings.timeout_seconds,
+        max_retries=settings.max_retries,
+    )
+    provider_label = "fake_live" if settings.stock_provider == "fake_live" else provider.name
+    wanted = set(symbols or [])
+    instruments = [
+        replace(row, provider=provider_label, data_mode="live")
+        for row in load_stock_watchlist(reference, provider=provider_label)
+        if row.is_active and (not wanted or row.symbol in wanted)
+    ][:stock_limit]
+    failures: list[str] = []
+    history_rows: list[StockPriceDailyRow] = []
+    quote_rows: list[MarketQuoteRow] = []
+    for instrument in instruments:
+        try:
+            history = provider.fetch_stock_daily(
+                symbol=instrument.provider_symbol or instrument.symbol,
+                start=start,
+                end=end,
+                exchange=instrument.exchange,
+            )
+            history = [
+                replace(row, symbol=instrument.symbol, provider=provider_label, data_mode="live", source_updated_at=row.date)
+                for row in history
+            ]
+        except Exception as exc:
+            failures.append(f"STOCK {instrument.symbol}: provider={provider_label} error={exc}")
+            continue
+        if not history:
+            failures.append(f"STOCK {instrument.symbol}: provider={provider_label} returned no history")
+            continue
+        quote = _stock_quote_from_history(instrument.symbol, instrument.exchange, history)
+        if quote is not None:
+            quote_rows.append(replace(quote, provider=provider_label, data_mode="live", source_updated_at=quote.quote_time))
+        history_rows.extend(history)
+
+    if failures and not allow_partial:
+        return 0, failures
+    rows_written = upsert_instruments(settings.db_path, instruments)
+    rows_written += upsert_stock_prices_daily(settings.db_path, history_rows)
+    rows_written += upsert_market_quotes_latest(settings.db_path, quote_rows)
+    return rows_written, failures
+
+
+def _prepare_live_fx(
+    settings: Settings,
+    reference: str,
+    start: date,
+    end: date,
+    symbols: list[str] | None,
+    allow_partial: bool,
+) -> tuple[int, list[str]]:
+    wanted = set(symbols or DASHBOARD_FX_SYMBOLS)
+    currency_rows = [
+        replace(row, provider=settings.fx_provider, data_mode="live")
+        for row in load_currency_reference(reference, provider=settings.fx_provider)
+        if row.symbol in wanted and row.symbol in set(DASHBOARD_FX_SYMBOLS)
+    ]
+    requested_symbols = [row.symbol for row in currency_rows]
+    provider_label = "fake_live" if settings.fx_provider == "fake_live" else "frankfurter"
+    failures: list[str] = []
+    fx_rows: list[FxRateRow] = []
+    if settings.fx_provider == "fake_live":
+        index = 0
+        current = start
+        fetched_at = utc_now_iso()
+        while current <= end:
+            for symbol in requested_symbols:
+                fx_rows.append(
+                    FxRateRow(
+                        date=current.isoformat(),
+                        base="USD",
+                        symbol=symbol,
+                        rate=1.0 if symbol == "USD" else _mock_fx_rate(symbol, index),
+                        source=provider_label,
+                        fetched_at=fetched_at,
+                        data_mode="live",
+                        source_updated_at=current.isoformat(),
+                    )
+                )
+            index += 1
+            current += timedelta(days=1)
+    else:
+        external_symbols = [symbol for symbol in requested_symbols if symbol != "USD"]
+        if external_symbols:
+            try:
+                client = FrankfurterClient(
+                    base_url=settings.api_base_url,
+                    cache_dir=settings.cache_dir,
+                    timeout_seconds=settings.timeout_seconds,
+                    use_cache=settings.use_cache,
+                    max_retries=settings.max_retries,
+                    use_cache_latest=settings.use_cache_latest,
+                )
+                payload = client.fetch_timeseries(start=start.isoformat(), end=end.isoformat(), base="USD", symbols=external_symbols)
+                fx_rows = [
+                    replace(row, source=provider_label, data_mode="live", source_updated_at=row.date)
+                    for row in normalize_timeseries(payload, base="USD", source=provider_label)
+                ]
+            except Exception as exc:
+                return 0, [f"FX USD/{','.join(external_symbols)}: provider={provider_label} error={exc}"]
+        dates = sorted({row.date for row in fx_rows})
+        if "USD" in requested_symbols:
+            if not dates:
+                dates = [(start + timedelta(days=offset)).isoformat() for offset in range((end - start).days + 1)]
+            fetched_at = utc_now_iso()
+            fx_rows.extend(
+                FxRateRow(
+                    date=raw_date,
+                    base="USD",
+                    symbol="USD",
+                    rate=1.0,
+                    source=provider_label,
+                    fetched_at=fetched_at,
+                    data_mode="live",
+                    source_updated_at=raw_date,
+                )
+                for raw_date in dates
+            )
+    returned_symbols = {row.symbol for row in fx_rows}
+    for symbol in requested_symbols:
+        if symbol not in returned_symbols:
+            failures.append(f"FX USD/{symbol}: provider={provider_label} returned no supported history")
+    if failures and not allow_partial:
+        return 0, failures
+    rows_written = upsert_instruments(settings.db_path, currency_rows)
+    rows_written += upsert_fx_rates(settings.db_path, fx_rows)
+    rows_written += upsert_market_quotes_latest(settings.db_path, [replace(row, data_mode="live", source_updated_at=row.quote_time) for row in _latest_fx_quotes(fx_rows)])
+    return rows_written, failures
+
+
+def _prepare_live_crypto(
+    settings: Settings,
+    reference: str,
+    start: str,
+    end: str,
+    symbols: list[str] | None,
+    allow_partial: bool,
+) -> tuple[int, list[str]]:
+    provider = MockCryptoProvider() if settings.crypto_provider == "fake_live" else build_crypto_provider(
+        demo_mode=False,
+        timeout_seconds=settings.timeout_seconds,
+        max_retries=settings.max_retries,
+    )
+    provider_label = "fake_live" if settings.crypto_provider == "fake_live" else provider.name
+    wanted = set(symbols or DASHBOARD_CRYPTO_SYMBOLS)
+    assets = [asset for asset in _select_crypto_assets(reference) if asset.symbol in wanted]
+    instruments = [replace(row, provider=provider_label, data_mode="live") for row in _crypto_instruments(replace(settings, market_data_demo_mode=False), assets)]
+    failures: list[str] = []
+    history_rows: list[CryptoPriceDailyRow] = []
+    quote_rows: list[MarketQuoteRow] = []
+    for asset in assets:
+        try:
+            history = [
+                replace(row, provider=provider_label, data_mode="live", source_updated_at=row.date)
+                for row in provider.fetch_daily(asset, start, end)
+            ]
+        except Exception as exc:
+            failures.append(f"CRYPTO {asset.symbol}: provider={provider_label} error={exc}")
+            continue
+        if not history:
+            failures.append(f"CRYPTO {asset.symbol}: provider={provider_label} returned no history")
+            continue
+        quote = _crypto_quote_from_history(asset, history)
+        if quote is not None:
+            quote_rows.append(replace(quote, provider=provider_label, data_mode="live", source_updated_at=quote.quote_time))
+        history_rows.extend(history)
+    if failures and not allow_partial:
+        return 0, failures
+    rows_written = upsert_instruments(settings.db_path, instruments)
+    rows_written += upsert_crypto_prices_daily(settings.db_path, history_rows)
+    rows_written += upsert_market_quotes_latest(settings.db_path, quote_rows)
+    return rows_written, failures
+
+
+def _prepare_live_macro(
+    settings: Settings,
+    reference: str,
+    start: str,
+    end: str,
+    symbols: list[str] | None,
+    allow_partial: bool,
+) -> tuple[int, list[str]]:
+    provider = MockMacroProvider() if settings.macro_provider == "fake_live" else build_macro_provider(
+        demo_mode=False,
+        timeout_seconds=settings.timeout_seconds,
+        max_retries=settings.max_retries,
+    )
+    provider_label = "fake_live" if settings.macro_provider == "fake_live" else provider.name
+    wanted = set(symbols or [])
+    indicators = [
+        indicator for indicator in load_macro_reference(reference)
+        if (not wanted or indicator.indicator_code in wanted)
+    ]
+    supported = [
+        indicator for indicator in indicators
+        if settings.macro_provider == "fake_live" or indicator.source.lower().startswith("banco central")
+    ]
+    unsupported = [
+        f"MACRO {indicator.indicator_code}: provider={provider_label} unsupported live source={indicator.source}"
+        for indicator in indicators
+        if indicator not in supported
+    ]
+    failures = list(unsupported)
+    history_rows: list[MacroIndicatorDailyRow] = []
+    quote_rows: list[MarketQuoteRow] = []
+    for indicator in supported:
+        try:
+            rows = [
+                replace(row, source=provider_label, data_mode="live", source_updated_at=row.date)
+                for row in provider.fetch_daily(indicator, start, end)
+            ]
+        except Exception as exc:
+            failures.append(f"MACRO {indicator.indicator_code}: provider={provider_label} error={exc}")
+            continue
+        if not rows:
+            failures.append(f"MACRO {indicator.indicator_code}: provider={provider_label} returned no history")
+            continue
+        history_rows.extend(rows)
+        quote_rows.append(replace(_macro_quote(indicator, rows[-2:]), provider=provider_label, data_mode="live", source_updated_at=rows[-1].date))
+    if failures and not allow_partial:
+        return 0, failures
+    instruments = [replace(row, provider=provider_label, data_mode="live") for row in _macro_instruments(replace(settings, market_data_demo_mode=False), supported)]
+    rows_written = upsert_instruments(settings.db_path, instruments)
+    rows_written += upsert_macro_indicators_daily(settings.db_path, history_rows)
+    rows_written += upsert_market_quotes_latest(settings.db_path, quote_rows)
+    return rows_written, failures
 
 
 def _prepare_stocks(settings: Settings, reference: str, start: str, end: str, stock_limit: int) -> int:
@@ -393,7 +776,7 @@ def _macro_quote(indicator: MacroIndicatorConfig, rows: list[MacroIndicatorDaily
         percent_change=percent_change,
         volume=None,
         quote_time=getattr(latest, "date", None),
-        provider="mock_macro",
+        provider=latest.source,
         fetched_at=utc_now_iso(),
     )
 

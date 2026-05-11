@@ -30,6 +30,14 @@ class Settings:
     market_data_demo_mode: bool
     api_host: str
     api_port: int
+    fx_api_key: str = ""
+    crypto_api_key: str = ""
+    macro_api_key: str = ""
+    fred_api_key: str = ""
+    fx_provider: str = "frankfurter"
+    crypto_provider: str = "coingecko"
+    stock_provider: str = "twelvedata"
+    macro_provider: str = "bcb_sgs"
 
 
 DEFAULTS = Settings(
@@ -43,6 +51,11 @@ DEFAULTS = Settings(
     use_cache=True,
     use_cache_latest=False,
     twelve_data_api_key="",
+    fred_api_key="",
+    fx_provider="frankfurter",
+    crypto_provider="coingecko",
+    stock_provider="twelvedata",
+    macro_provider="bcb_sgs",
     market_data_provider="twelvedata",
     market_data_demo_mode=False,
     api_host="127.0.0.1",
@@ -100,6 +113,14 @@ def load_settings(args: object | None = None) -> Settings:
         use_cache=not no_cache_arg,
         use_cache_latest=use_cache_latest and not no_cache_arg,
         twelve_data_api_key=os.getenv("TWELVE_DATA_API_KEY", DEFAULTS.twelve_data_api_key),
+        fx_api_key=os.getenv("FX_API_KEY", DEFAULTS.fx_api_key),
+        crypto_api_key=os.getenv("CRYPTO_API_KEY", DEFAULTS.crypto_api_key),
+        macro_api_key=os.getenv("MACRO_API_KEY", DEFAULTS.macro_api_key),
+        fred_api_key=os.getenv("FRED_API_KEY", DEFAULTS.fred_api_key),
+        fx_provider=os.getenv("FX_PROVIDER", DEFAULTS.fx_provider).strip().lower(),
+        crypto_provider=os.getenv("CRYPTO_PROVIDER", DEFAULTS.crypto_provider).strip().lower(),
+        stock_provider=os.getenv("STOCK_PROVIDER", os.getenv("MARKET_DATA_PROVIDER", DEFAULTS.stock_provider)).strip().lower(),
+        macro_provider=os.getenv("MACRO_PROVIDER", DEFAULTS.macro_provider).strip().lower(),
         market_data_provider=os.getenv("MARKET_DATA_PROVIDER", DEFAULTS.market_data_provider).strip().lower(),
         market_data_demo_mode=parse_bool(
             os.getenv("MARKET_DATA_DEMO_MODE", str(DEFAULTS.market_data_demo_mode)),
@@ -123,6 +144,14 @@ def validate_settings(settings: Settings) -> None:
         raise ValueError("LOG_FILE nao pode ser vazio")
     if settings.market_data_provider not in {"twelvedata", "mock"}:
         raise ValueError("MARKET_DATA_PROVIDER invalido: use twelvedata ou mock")
+    if settings.fx_provider not in {"frankfurter", "fake_live", "none", "disabled", "off"}:
+        raise ValueError("FX_PROVIDER invalido: use frankfurter, fake_live ou none")
+    if settings.crypto_provider not in {"coingecko", "fake_live", "none", "disabled", "off"}:
+        raise ValueError("CRYPTO_PROVIDER invalido: use coingecko, fake_live ou none")
+    if settings.stock_provider not in {"twelvedata", "fake_live", "none", "disabled", "off"}:
+        raise ValueError("STOCK_PROVIDER invalido: use twelvedata, fake_live ou none")
+    if settings.macro_provider not in {"bcb_sgs", "fred", "fake_live", "none", "disabled", "off"}:
+        raise ValueError("MACRO_PROVIDER invalido: use bcb_sgs, fred, fake_live ou none")
     if settings.api_port <= 0 or settings.api_port > 65535:
         raise ValueError("API_PORT invalida")
 

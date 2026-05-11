@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 
+from .data_origin import canonical_record_mode
+
 
 @dataclass(frozen=True)
 class FxRateRow:
@@ -11,6 +13,8 @@ class FxRateRow:
     rate: float
     source: str
     fetched_at: str
+    data_mode: str = "unknown"
+    source_updated_at: str | None = None
 
     def as_db_dict(self) -> dict[str, str | float]:
         return {
@@ -20,6 +24,8 @@ class FxRateRow:
             "rate": self.rate,
             "source": self.source,
             "fetched_at": self.fetched_at,
+            "data_mode": canonical_record_mode(self.data_mode, self.source),
+            "source_updated_at": self.source_updated_at,
         }
 
 
@@ -37,6 +43,7 @@ class InstrumentRow:
     priority: int
     created_at: str
     updated_at: str
+    data_mode: str = "unknown"
 
     def as_db_dict(self) -> dict[str, str | int | None]:
         return {
@@ -52,6 +59,7 @@ class InstrumentRow:
             "priority": self.priority,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "data_mode": canonical_record_mode(self.data_mode, self.provider),
         }
 
 
@@ -69,6 +77,8 @@ class StockPriceDailyRow:
     currency: str | None
     provider: str | None
     fetched_at: str
+    data_mode: str = "unknown"
+    source_updated_at: str | None = None
 
     def as_db_dict(self) -> dict[str, str | float | int | None]:
         return {
@@ -84,6 +94,8 @@ class StockPriceDailyRow:
             "currency": self.currency,
             "provider": self.provider,
             "fetched_at": self.fetched_at,
+            "data_mode": canonical_record_mode(self.data_mode, self.provider),
+            "source_updated_at": self.source_updated_at,
         }
 
 
@@ -105,6 +117,8 @@ class MarketQuoteRow:
     quote_time: str | None
     provider: str | None
     fetched_at: str
+    data_mode: str = "unknown"
+    source_updated_at: str | None = None
 
     def as_db_dict(self) -> dict[str, str | float | int | None]:
         return {
@@ -124,6 +138,8 @@ class MarketQuoteRow:
             "quote_time": self.quote_time,
             "provider": self.provider,
             "fetched_at": self.fetched_at,
+            "data_mode": canonical_record_mode(self.data_mode, self.provider),
+            "source_updated_at": self.source_updated_at,
         }
 
 
@@ -147,6 +163,8 @@ class AnalysisSnapshotRow:
     trend: str
     signal: str
     notes: str | None
+    data_mode: str = "unknown"
+    source_updated_at: str | None = None
 
     def as_db_dict(self) -> dict[str, str | float | None]:
         return {
@@ -168,6 +186,8 @@ class AnalysisSnapshotRow:
             "trend": self.trend,
             "signal": self.signal,
             "notes": self.notes,
+            "data_mode": canonical_record_mode(self.data_mode),
+            "source_updated_at": self.source_updated_at,
         }
 
 
@@ -180,6 +200,8 @@ class MacroIndicatorDailyRow:
     unit: str | None
     source: str | None
     fetched_at: str
+    data_mode: str = "unknown"
+    source_updated_at: str | None = None
 
     def as_db_dict(self) -> dict[str, str | float | None]:
         return {
@@ -190,6 +212,8 @@ class MacroIndicatorDailyRow:
             "unit": self.unit,
             "source": self.source,
             "fetched_at": self.fetched_at,
+            "data_mode": canonical_record_mode(self.data_mode, self.source),
+            "source_updated_at": self.source_updated_at,
         }
 
 
@@ -204,6 +228,8 @@ class CryptoPriceDailyRow:
     change_24h: float | None
     provider: str | None
     fetched_at: str
+    data_mode: str = "unknown"
+    source_updated_at: str | None = None
 
     def as_db_dict(self) -> dict[str, str | float | None]:
         return {
@@ -216,4 +242,6 @@ class CryptoPriceDailyRow:
             "change_24h": self.change_24h,
             "provider": self.provider,
             "fetched_at": self.fetched_at,
+            "data_mode": canonical_record_mode(self.data_mode, self.provider),
+            "source_updated_at": self.source_updated_at,
         }

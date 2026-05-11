@@ -1,6 +1,7 @@
 package com.example.financedashboard.model;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record DashboardCard(
@@ -8,6 +9,9 @@ public record DashboardCard(
         Double value,
         Double change,
         String unit,
-        String status
+        String status,
+        String provider,
+        @JsonProperty("data_mode") String dataMode,
+        @JsonProperty("data_warning") String dataWarning
 ) {
 }

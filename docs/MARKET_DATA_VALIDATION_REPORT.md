@@ -75,3 +75,21 @@ External live validation is optional and non-blocking. This run reported `SKIPPE
 Safe to review for commit: source code, tests, docs, frontend Java files, `.gitignore` if intentionally changed.
 
 Do not commit: `.venv/`, `data/*.sqlite`, `data/*.sqlite-*`, `logs/`, `cache/`, `frontend-java/target/`, `__pycache__/`, `.pytest_cache/`, `*.egg-info/`, temporary files.
+# Market Data Validation Report
+
+Current validation strategy separates origin before value interpretation:
+
+- Demo records are valid for UI/testing only and are reported as `data_mode=demo`.
+- Live records must come from configured providers and are reported as `data_mode=live`.
+- Mixed datasets are allowed only when explicit and are reported as `data_mode=mixed`.
+- Unknown origin is reported as `data_mode=unknown` and should be reviewed before analysis.
+
+Commands:
+
+```powershell
+python -m fx_rates providers status
+python -m fx_rates dashboard audit
+python -m fx_rates dashboard audit-market
+```
+
+`audit-market` reports data-mode counts, provider by asset type, demo/live/unknown symbols, stale data, missing quote/history/analysis links, suspicious ranges, missing stock currency, and macro unit issues. Demo data is a warning/risk, not a fatal error.

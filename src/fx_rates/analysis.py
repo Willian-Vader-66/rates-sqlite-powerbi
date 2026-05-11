@@ -7,6 +7,7 @@ from typing import Any
 
 from .config import Settings
 from .db_sqlite import insert_analysis_snapshots
+from .data_origin import canonical_record_mode
 from .models import AnalysisSnapshotRow
 from .utils import normalize_symbol_list, utc_now_iso
 
@@ -50,7 +51,7 @@ def _build_stock_snapshots(db_path: str, symbols: list[str] | None) -> list[Anal
         rows = _history_rows(
             db_path,
             """
-            SELECT date, symbol, exchange, close AS value
+            SELECT date, symbol, exchange, close AS value, provider, data_mode, source_updated_at
             FROM stock_prices_daily
             WHERE symbol = ? AND close IS NOT NULL
             ORDER BY date
@@ -69,7 +70,7 @@ def _build_fx_snapshots(db_path: str, symbols: list[str] | None) -> list[Analysi
         rows = _history_rows(
             db_path,
             """
-            SELECT date, symbol, base AS exchange, rate AS value
+            SELECT date, symbol, base AS exchange, rate AS value, source AS provider, data_mode, source_updated_at
             FROM fx_rates
             WHERE base = ? AND symbol = ? AND rate IS NOT NULL
             ORDER BY date
@@ -88,7 +89,7 @@ def _build_crypto_snapshots(db_path: str, symbols: list[str] | None) -> list[Ana
         rows = _history_rows(
             db_path,
             """
-            SELECT date, symbol, 'CRYPTO' AS exchange, price_usd AS value
+            SELECT date, symbol, 'CRYPTO' AS exchange, price_usd AS value, provider, data_mode, source_updated_at
             FROM crypto_prices_daily
             WHERE symbol = ? AND price_usd IS NOT NULL
             ORDER BY date
@@ -109,7 +110,7 @@ def _build_macro_snapshots(db_path: str, symbols: list[str] | None) -> list[Anal
         rows = _history_rows(
             db_path,
             """
-            SELECT date, indicator_code AS symbol, 'MACRO' AS exchange, value
+            SELECT date, indicator_code AS symbol, 'MACRO' AS exchange, value, source AS provider, data_mode, source_updated_at
             FROM macro_indicators_daily
             WHERE indicator_code = ? AND value IS NOT NULL
             ORDER BY date
@@ -131,6 +132,8 @@ def _snapshot_from_series(
     dated_values = [(row["date"], float(row["value"])) for row in rows if row["value"] is not None]
     values = [value for _, value in dated_values]
     generated_at = utc_now_iso()
+    data_mode = _series_data_mode(rows)
+    source_updated_at = rows[-1].get("source_updated_at") or rows[-1].get("date") if rows else None
     if not values:
         return _empty_snapshot(symbol, asset_type, exchange, generated_at, "no historical data")
 
@@ -174,6 +177,8 @@ def _snapshot_from_series(
         trend=trend,
         signal=signal,
         notes=notes,
+        data_mode=data_mode,
+        source_updated_at=source_updated_at,
     )
 
 
@@ -204,6 +209,19 @@ def _empty_snapshot(
         signal="UNKNOWN",
         notes=notes,
     )
+
+
+def _series_data_mode(rows: list[dict[str, Any]]) -> str:
+    modes = {
+        canonical_record_mode(row.get("data_mode"), row.get("provider"))
+        for row in rows
+    }
+    modes.discard("unknown")
+    if len(modes) > 1:
+        return "mixed"
+    if len(modes) == 1:
+        return modes.pop()
+    return "unknown"
 
 
 def _symbols_from_table(db_path: str, table: str, column: str) -> list[str]:

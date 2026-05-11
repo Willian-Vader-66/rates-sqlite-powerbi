@@ -42,6 +42,7 @@ import javafx.scene.control.SplitPane;
 import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
 import javafx.scene.control.ToggleButton;
+import javafx.scene.control.Tooltip;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.GridPane;
@@ -408,6 +409,7 @@ public class DashboardController {
         lastIngest.setValue(summary.lastSuccessfulIngestRun() == null
                 ? "-"
                 : summary.lastSuccessfulIngestRun().mode() + " (" + FormatUtils.integer(summary.lastSuccessfulIngestRun().rowCount()) + " rows)");
+        applyMetricDataMode(effectiveDataMode(data.systemStatus(), data.summary()));
         tableController.updateData(data.instruments(), data.quotes(), data.analysis());
         updateMarketOverview(data.marketOverview());
         updateFixedCharts(data.fixedCharts());
@@ -438,6 +440,8 @@ public class DashboardController {
             String suffix = card.unit() == null || card.unit().isBlank() ? "" : " " + card.unit();
             metric.setValue(FormatUtils.price(card.value()) + suffix);
             metric.setCaption(overviewPeriod.getValue().label() + " " + FormatUtils.percent(card.change()));
+            String mode = dataModeOrUnknown(card.dataMode());
+            metric.setBadge(dataModeBadgeText(mode, card.provider()), mode);
             metric.getStyleClass().add("overview-card");
             if ("up".equalsIgnoreCase(card.status())) {
                 metric.getStyleClass().add("status-up");
@@ -1080,18 +1084,33 @@ public class DashboardController {
                 FormatUtils.integer(status.latestAnalysisCount()),
                 FormatUtils.integer(status.historicalRowCount())
         ));
-        settingsCoverage.setText("History: %s to %s".formatted(FormatUtils.text(status.dateMin()), FormatUtils.text(status.dateMax())));
+        String coverage = status.coverage() == null
+                ? "History: %s to %s".formatted(FormatUtils.text(status.dateMin()), FormatUtils.text(status.dateMax()))
+                : "History: %s to %s\nRows: %s".formatted(
+                FormatUtils.text(status.coverage().dateMin()),
+                FormatUtils.text(status.coverage().dateMax()),
+                FormatUtils.integer(status.coverage().historicalRows())
+        );
+        settingsCoverage.setText(coverage);
         String dataMode = effectiveDataMode(status, summary);
         String providers = status.providers() == null || status.providers().isEmpty() ? "-" : String.join(", ", status.providers());
+        String providerSummary = formatProviderSummary(status.providerSummary());
+        String modeCounts = formatDataModeCounts(status.dataModeCounts());
         settingsRuntime.setText("""
                 Data mode: %s
                 Providers: %s
+                Provider details: %s
+                Mode counts: %s
+                Live provider status: %s
                 Data timestamp: %s
                 Warning: %s
                 Recommended prepare command: %s
                 """.formatted(
                 dataMode.toUpperCase(),
                 providers,
+                providerSummary,
+                modeCounts,
+                formatLiveProviderStatus(status.liveProviderStatus()),
                 FormatUtils.text(status.dataGeneratedAt()),
                 FormatUtils.text(status.dataWarning()),
                 FormatUtils.text(status.recommendedPrepareCommand())
@@ -1103,6 +1122,7 @@ public class DashboardController {
         dataModeBadge.setText(mode.toUpperCase() + " DATA");
         dataModeBadge.getStyleClass().removeAll("data-mode-demo", "data-mode-live", "data-mode-mixed", "data-mode-unknown");
         dataModeBadge.getStyleClass().add("data-mode-" + mode);
+        Tooltip.install(dataModeBadge, new Tooltip(dataModeTooltip(status, summary, mode)));
     }
 
     private String effectiveDataMode(SystemStatus status, DashboardSummary summary) {
@@ -1114,6 +1134,81 @@ public class DashboardController {
             return "unknown";
         }
         return mode.trim().toLowerCase();
+    }
+
+    private void applyMetricDataMode(String mode) {
+        String label = switch (mode) {
+            case "demo" -> "Demo";
+            case "live" -> "Live";
+            case "mixed" -> "Mixed";
+            default -> "Unknown";
+        };
+        for (MetricCard card : List.of(totalInstruments, activeStocks, activeCurrencies, activeCrypto, activeMacro, latestQuotes, failedRuns, lastIngest)) {
+            card.setBadge(label, mode);
+        }
+    }
+
+    private String dataModeOrUnknown(String mode) {
+        return mode == null || mode.isBlank() ? "unknown" : mode.trim().toLowerCase();
+    }
+
+    private String dataModeBadgeText(String mode, String provider) {
+        if ("live".equals(mode) && provider != null && !provider.isBlank()) {
+            return provider;
+        }
+        return switch (mode) {
+            case "demo" -> "Demo";
+            case "live" -> "Live";
+            case "mixed" -> "Mixed";
+            default -> "Unknown";
+        };
+    }
+
+    private String dataModeTooltip(SystemStatus status, DashboardSummary summary, String mode) {
+        String warning = status != null ? status.dataWarning() : null;
+        if ((warning == null || warning.isBlank()) && summary != null) {
+            warning = summary.warning();
+        }
+        String providers = status != null && status.providers() != null && !status.providers().isEmpty()
+                ? String.join(", ", status.providers())
+                : "-";
+        return "Mode: %s\nProviders: %s\n%s".formatted(mode.toUpperCase(), providers, FormatUtils.text(warning));
+    }
+
+    private String formatProviderSummary(List<SystemStatus.ProviderSummary> summary) {
+        if (summary == null || summary.isEmpty()) {
+            return "-";
+        }
+        return summary.stream()
+                .map(item -> item.assetType() + "=" + (item.providers() == null || item.providers().isEmpty() ? "-" : String.join("/", item.providers())))
+                .reduce((left, right) -> left + "; " + right)
+                .orElse("-");
+    }
+
+    private String formatDataModeCounts(SystemStatus.DataModeCounts counts) {
+        if (counts == null) {
+            return "-";
+        }
+        return "demo=%s live=%s mixed=%s unknown=%s".formatted(
+                FormatUtils.integer(counts.demo()),
+                FormatUtils.integer(counts.live()),
+                FormatUtils.integer(counts.mixed()),
+                FormatUtils.integer(counts.unknown())
+        );
+    }
+
+    private String formatLiveProviderStatus(SystemStatus.LiveProviderStatus status) {
+        if (status == null || status.providers() == null || status.providers().isEmpty()) {
+            return "-";
+        }
+        return status.providers().stream()
+                .map(item -> {
+                    String missing = item.missingEnv() == null || item.missingEnv().isEmpty() ? "" : " missing=" + String.join("/", item.missingEnv());
+                    String configured = Boolean.TRUE.equals(item.configured()) ? "configured" : "missing";
+                    return "%s:%s/%s%s".formatted(item.assetType(), item.provider(), configured, missing);
+                })
+                .reduce((left, right) -> left + "; " + right)
+                .orElse("-");
     }
 
     private void addStockCell(GridPane table, int col, int row, String text, String... styleClasses) {

@@ -742,6 +742,15 @@
     -fx-text-fill: #f8fafc;
 }
 
+.metric-badge {
+    -fx-padding: 2 6 2 6;
+    -fx-background-radius: 5;
+    -fx-border-radius: 5;
+    -fx-font-size: 9px;
+    -fx-font-weight: 700;
+    -fx-text-fill: #f8fafc;
+}
+
 .data-mode-demo {
     -fx-background-color: rgba(245, 158, 11, 0.20);
     -fx-border-color: rgba(245, 158, 11, 0.70);

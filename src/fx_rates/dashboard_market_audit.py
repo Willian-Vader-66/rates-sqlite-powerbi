@@ -49,7 +49,7 @@ SAMPLE_SYMBOLS = [
 def run_market_audit(db_path: str, *, with_live_sample: bool = False, output_json: bool = False) -> int:
     audit = audit_market(db_path, with_live_sample=with_live_sample)
     print(json.dumps(audit, indent=2, ensure_ascii=False) if output_json else format_market_audit(audit))
-    hard_fail_flags = {"NO_HISTORY", "NO_LATEST_QUOTE", "FX_SUSPICIOUS_RANGE", "STOCK_SUSPICIOUS_RANGE", "CRYPTO_SUSPICIOUS_RANGE", "MACRO_UNIT_SUSPICIOUS", "INCONSISTENT_30D_CHANGE", "INCONSISTENT_90D_CHANGE", "TOP_WORST_RANKING_BUG"}
+    hard_fail_flags = {"NO_HISTORY", "NO_LATEST_QUOTE", "FX_SUSPICIOUS_RANGE", "STOCK_SUSPICIOUS_RANGE", "STOCK_UNIT_SUSPICIOUS", "CRYPTO_SUSPICIOUS_RANGE", "CRYPTO_UNIT_SUSPICIOUS", "MACRO_UNIT_SUSPICIOUS", "INCONSISTENT_30D_CHANGE", "INCONSISTENT_90D_CHANGE", "TOP_WORST_RANKING_BUG"}
     return 1 if any(hard_fail_flags.intersection(item["flags"]) for item in audit.get("items", [])) else 0
 
 
@@ -60,7 +60,7 @@ def audit_market(db_path: str, *, with_live_sample: bool = False) -> dict[str, A
     with sqlite3.connect(str(path)) as conn:
         conn.row_factory = sqlite3.Row
         instruments = [dict(row) for row in conn.execute("""
-            SELECT instrument_id, symbol, name, asset_type, exchange, currency, sector, provider, provider_symbol, is_active
+            SELECT instrument_id, symbol, name, asset_type, exchange, currency, sector, provider, provider_symbol, data_mode, is_active
             FROM instruments
             WHERE is_active=1
             ORDER BY asset_type, priority, symbol
@@ -71,7 +71,12 @@ def audit_market(db_path: str, *, with_live_sample: bool = False) -> dict[str, A
     data_mode = get_data_mode_summary(str(path))
     if data_mode["data_mode"] == "demo":
         for item in items:
-            item["flags"].append("DEMO_DATA_VISIBLE_AS_LIVE")
+            item["flags"].append("DEMO_DATA_PRESENT")
+    elif data_mode["data_mode"] == "mixed":
+        for item in items:
+            if item.get("is_demo"):
+                item["flags"].append("DEMO_DATA_PRESENT")
+            item["flags"].append("MIXED_DATASET_REVIEW_REQUIRED")
     ranking = _ranking_flags(str(path), items)
     live_samples = _live_validation(items) if with_live_sample else {"status": "SKIPPED", "reason": "run with --with-live-sample"}
     return {
@@ -84,6 +89,7 @@ def audit_market(db_path: str, *, with_live_sample: bool = False) -> dict[str, A
         "items": items,
         "ranking": ranking,
         "live_validation": live_samples,
+        "data_mode_breakdown": _data_mode_breakdown(items),
         "summary": _summary(items),
     }
 
@@ -119,11 +125,15 @@ def _audit_instrument(conn: sqlite3.Connection, instrument: dict[str, Any]) -> d
     if _is_stale(latest_date):
         flags.append("STALE_DATA")
     flags.extend(_range_flags(asset_type, symbol, exchange, latest_value, metadata.get("display_unit")))
+    flags.extend(_source_unit_flags(asset_type, history.get("unit")))
     if _differs(change_30d, analysis.get("change_30d") if analysis else None):
         flags.append("INCONSISTENT_30D_CHANGE")
     if _differs(change_90d, analysis.get("change_90d") if analysis else None):
         flags.append("INCONSISTENT_90D_CHANGE")
     provider = latest.get("provider") or history.get("provider") or instrument.get("provider")
+    row_mode = (latest.get("data_mode") if latest else None) or history.get("data_mode") or instrument.get("data_mode")
+    if not row_mode:
+        row_mode = "demo" if _is_demo_provider(provider) else "unknown"
     return {
         "asset_type": asset_type,
         "symbol": symbol,
@@ -143,7 +153,9 @@ def _audit_instrument(conn: sqlite3.Connection, instrument: dict[str, Any]) -> d
         "stored_change_30d_pct": (analysis.get("change_30d") * 100.0) if analysis and analysis.get("change_30d") is not None else None,
         "stored_change_90d_pct": (analysis.get("change_90d") * 100.0) if analysis and analysis.get("change_90d") is not None else None,
         "provider": provider,
-        "is_demo": _is_demo_provider(provider),
+        "data_mode": row_mode,
+        "is_demo": row_mode == "demo" or _is_demo_provider(provider),
+        "is_live": row_mode == "live",
         "flags": sorted(set(flags)),
     }
 
@@ -155,7 +167,7 @@ def _latest_quote(conn: sqlite3.Connection, asset_type: str, symbol: str, exchan
         clause += " AND exchange=?"
         params.append(exchange)
     row = conn.execute(f"""
-        SELECT price, quote_time, provider, fetched_at, percent_change
+        SELECT price, quote_time, provider, fetched_at, percent_change, data_mode, source_updated_at
         FROM market_quotes_latest
         WHERE {clause}
         ORDER BY fetched_at DESC, quote_time DESC
@@ -177,13 +189,13 @@ def _latest_analysis(conn: sqlite3.Connection, asset_type: str, symbol: str) -> 
 
 def _history(conn: sqlite3.Connection, asset_type: str, symbol: str, exchange: str | None) -> dict[str, Any]:
     if asset_type == "FX":
-        rows = conn.execute("SELECT date, rate AS value, source AS provider, NULL AS unit FROM fx_rates WHERE base=? AND symbol=? AND rate IS NOT NULL ORDER BY date", (exchange or "USD", symbol)).fetchall()
+        rows = conn.execute("SELECT date, rate AS value, source AS provider, NULL AS unit, data_mode FROM fx_rates WHERE base=? AND symbol=? AND rate IS NOT NULL ORDER BY date", (exchange or "USD", symbol)).fetchall()
     elif asset_type == "CRYPTO":
-        rows = conn.execute("SELECT date, price_usd AS value, provider, NULL AS unit FROM crypto_prices_daily WHERE symbol=? AND price_usd IS NOT NULL ORDER BY date", (symbol,)).fetchall()
+        rows = conn.execute("SELECT date, price_usd AS value, provider, NULL AS unit, data_mode FROM crypto_prices_daily WHERE symbol=? AND price_usd IS NOT NULL ORDER BY date", (symbol,)).fetchall()
     elif asset_type == "MACRO":
-        rows = conn.execute("SELECT date, value, source AS provider, unit FROM macro_indicators_daily WHERE indicator_code=? AND value IS NOT NULL ORDER BY date", (symbol,)).fetchall()
+        rows = conn.execute("SELECT date, value, source AS provider, unit, data_mode FROM macro_indicators_daily WHERE indicator_code=? AND value IS NOT NULL ORDER BY date", (symbol,)).fetchall()
     else:
-        rows = conn.execute("SELECT date, close AS value, provider, currency AS unit FROM stock_prices_daily WHERE symbol=? AND close IS NOT NULL ORDER BY date", (symbol,)).fetchall()
+        rows = conn.execute("SELECT date, close AS value, provider, currency AS unit, data_mode FROM stock_prices_daily WHERE symbol=? AND close IS NOT NULL ORDER BY date", (symbol,)).fetchall()
     points = [(str(row["date"]), float(row["value"])) for row in rows if row["value"] is not None]
     return {
         "points": points,
@@ -192,6 +204,7 @@ def _history(conn: sqlite3.Connection, asset_type: str, symbol: str, exchange: s
         "historical_row_count": len(points),
         "latest_value": points[-1][1] if points else None,
         "provider": rows[-1]["provider"] if rows else None,
+        "data_mode": rows[-1]["data_mode"] if rows and "data_mode" in rows[-1].keys() else None,
         "unit": rows[-1]["unit"] if rows and "unit" in rows[-1].keys() else None,
     }
 
@@ -218,13 +231,21 @@ def _range_flags(asset_type: str, symbol: str, exchange: str | None, value: floa
         if not (low <= float(value) <= high):
             flags.append("FX_SUSPICIOUS_RANGE")
     elif asset_type == "STOCK" and symbol in STOCK_RANGES:
+        if unit and unit.upper() != "USD":
+            flags.append("STOCK_UNIT_SUSPICIOUS")
         low, high = STOCK_RANGES[symbol]
         if not (low <= float(value) <= high):
             flags.append("STOCK_SUSPICIOUS_RANGE")
+    elif asset_type == "STOCK" and unit and unit.upper() != "USD":
+        flags.append("STOCK_UNIT_SUSPICIOUS")
     elif asset_type == "CRYPTO" and symbol in CRYPTO_RANGES:
+        if unit and unit.upper() != "USD":
+            flags.append("CRYPTO_UNIT_SUSPICIOUS")
         low, high = CRYPTO_RANGES[symbol]
         if not (low <= float(value) <= high):
             flags.append("CRYPTO_SUSPICIOUS_RANGE")
+    elif asset_type == "CRYPTO" and unit and unit.upper() != "USD":
+        flags.append("CRYPTO_UNIT_SUSPICIOUS")
     elif asset_type == "MACRO":
         rule = MACRO_RANGES.get(symbol)
         if not unit or unit == "index" and "CPI" not in symbol:
@@ -234,6 +255,15 @@ def _range_flags(asset_type: str, symbol: str, exchange: str | None, value: floa
             if unit != expected_unit or not (low <= float(value) <= high):
                 flags.append("MACRO_UNIT_SUSPICIOUS")
     return flags
+
+
+def _source_unit_flags(asset_type: str, unit: str | None) -> list[str]:
+    normalized = str(unit or "").strip().upper()
+    if asset_type == "STOCK" and normalized and normalized != "USD":
+        return ["STOCK_UNIT_SUSPICIOUS"]
+    if asset_type == "CRYPTO" and normalized and normalized != "USD":
+        return ["CRYPTO_UNIT_SUSPICIOUS"]
+    return []
 
 
 def _differs(calculated_pct: float | None, stored_ratio: float | None) -> bool:
@@ -282,7 +312,34 @@ def _summary(items: list[dict[str, Any]]) -> dict[str, Any]:
         "without_history": flag_counts.get("NO_HISTORY", 0),
         "stale": flag_counts.get("STALE_DATA", 0),
         "demo": sum(1 for item in items if item.get("is_demo")),
+        "live": sum(1 for item in items if item.get("is_live")),
+        "unknown": sum(1 for item in items if item.get("data_mode") == "unknown"),
+        "demo_symbols": [item["symbol"] for item in items if item.get("is_demo")],
+        "live_symbols": [item["symbol"] for item in items if item.get("is_live")],
+        "unknown_symbols": [item["symbol"] for item in items if item.get("data_mode") == "unknown"],
         "flag_counts": flag_counts,
+    }
+
+
+def _data_mode_breakdown(items: list[dict[str, Any]]) -> dict[str, Any]:
+    by_mode: dict[str, int] = {}
+    by_asset_type: dict[str, dict[str, int]] = {}
+    providers_by_asset_type: dict[str, set[str]] = {}
+    for item in items:
+        mode = str(item.get("data_mode") or "unknown")
+        asset_type = str(item.get("asset_type") or "UNKNOWN")
+        by_mode[mode] = by_mode.get(mode, 0) + 1
+        by_asset_type.setdefault(asset_type, {})
+        by_asset_type[asset_type][mode] = by_asset_type[asset_type].get(mode, 0) + 1
+        if item.get("provider"):
+            providers_by_asset_type.setdefault(asset_type, set()).add(str(item["provider"]))
+    return {
+        "by_mode": by_mode,
+        "by_asset_type": by_asset_type,
+        "providers_by_asset_type": {asset_type: sorted(values) for asset_type, values in sorted(providers_by_asset_type.items())},
+        "demo_symbols": [item["symbol"] for item in items if item.get("is_demo")],
+        "live_symbols": [item["symbol"] for item in items if item.get("is_live")],
+        "unknown_symbols": [item["symbol"] for item in items if item.get("data_mode") == "unknown"],
     }
 
 
@@ -369,6 +426,7 @@ def format_market_audit(audit: dict[str, Any]) -> str:
         "MARKET DATA AUDIT",
         f"DB: {audit['db_path']}",
         f"Data mode: {audit['data_mode']['data_mode'].upper()} providers={', '.join(audit['data_mode'].get('providers', [])) or '-'}",
+        f"Data mode counts: {audit.get('data_mode_breakdown', {}).get('by_mode', {})}",
         f"Historical range: {audit['date_range']['date_min']} to {audit['date_range']['date_max']} ({audit['date_range']['historical_rows']} rows)",
         f"Total instruments: {audit['summary']['total_instruments']}",
         "Flags: " + (", ".join(f"{k}={v}" for k, v in sorted(audit['summary']['flag_counts'].items())) or "none"),

@@ -28,6 +28,7 @@ from .db_sqlite import (
     list_instruments,
 )
 from .market_providers import build_market_provider
+from .provider_status import providers_status
 from .utils import split_symbols
 
 
@@ -51,6 +52,7 @@ def create_app(settings: Settings) -> FastAPI:
                 "error": str(exc),
             }
         data_mode = get_data_mode_summary(settings.db_path)
+        live_provider_status = providers_status(settings)
         return {
             "status": "ok",
             "db_path": settings.db_path,
@@ -60,11 +62,14 @@ def create_app(settings: Settings) -> FastAPI:
             "providers": data_mode["providers"],
             "data_generated_at": data_mode["generated_at"],
             "data_warning": data_mode["warning"],
+            "live_provider_status": live_provider_status,
         }
 
     @app.get("/api/system/status")
     def system_status() -> dict[str, Any]:
-        return get_system_status(settings.db_path)
+        status = get_system_status(settings.db_path)
+        status["live_provider_status"] = providers_status(settings)
+        return status
 
     @app.get("/api/instruments")
     def instruments(

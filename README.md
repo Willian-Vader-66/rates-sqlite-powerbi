@@ -24,6 +24,40 @@ This repository started as a small but production-minded local pipeline for fore
 
 This is not a professional trading platform. Quote collection is near-real-time polling, not a tick-by-tick feed, and provider rate limits should be respected.
 
+## Data Modes
+
+Market-data origin is explicit:
+
+- `demo`: deterministic mock data for local demos and offline validation.
+- `live`: data fetched from configured real providers.
+- `mixed`: demo and live records are both present.
+- `unknown`: origin cannot be trusted yet.
+
+Prepare demo data explicitly:
+
+```powershell
+python -m fx_rates dashboard prepare-demo --years 4 --demo
+```
+
+Check providers and audits:
+
+```powershell
+python -m fx_rates providers status
+python -m fx_rates dashboard audit
+python -m fx_rates dashboard audit-market
+```
+
+Live preparation fetches supported providers, writes `data_mode=live`, and does not silently fall back to demo:
+
+```powershell
+python -m fx_rates dashboard prepare-live --years 4
+python -m fx_rates dashboard prepare-live --years 4 --allow-mixed
+python -m fx_rates dashboard prepare-live --years 4 --asset-type FX --symbols BRL,EUR
+python -m fx_rates dashboard prepare-live --years 4 --asset-type STOCK --symbols AAPL,MSFT --replace-demo
+```
+
+See `docs/DATA_MODE_STRATEGY.md` and `docs/LIVE_PROVIDERS_SETUP.md`.
+
 ## Architecture
 
 ```text

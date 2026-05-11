@@ -7,12 +7,13 @@ from .config import ensure_runtime_dirs, load_settings
 from .crypto_ingest import run_crypto_backfill, run_crypto_daily, run_crypto_quotes
 from .dashboard_audit import run_dashboard_audit
 from .dashboard_market_audit import run_market_audit
-from .dashboard_prepare import run_prepare_demo_dashboard
+from .dashboard_prepare import run_prepare_demo_dashboard, run_prepare_live_dashboard
 from .db_sqlite import initialize_schema
 from .ingest import run_backfill, run_daily, run_status
 from .logging_setup import setup_logging
 from .macro_ingest import run_macro_backfill, run_macro_daily, run_macro_status
 from .market_ingest import run_import_instruments, run_quotes_poll, run_stocks_backfill, run_stocks_daily
+from .provider_status import print_providers_status
 from .utils import normalize_base, parse_yyyy_mm_dd, split_symbols
 
 
@@ -74,6 +75,12 @@ def build_parser() -> argparse.ArgumentParser:
     status = subparsers.add_parser("status", help="Status do ultimo run")
     status.add_argument("--last", type=int, default=10)
     _add_common_flags(status)
+
+    providers = subparsers.add_parser("providers", help="Diagnosticar providers de dados de mercado")
+    providers_sub = providers.add_subparsers(dest="providers_command", required=True)
+    providers_status = providers_sub.add_parser("status", help="Mostrar providers configurados sem revelar chaves")
+    providers_status.add_argument("--test-external", action="store_true", help="Reservado para smoke test externo opt-in")
+    _add_common_flags(providers_status)
 
     instruments = subparsers.add_parser("instruments", help="Gerenciar instrumentos")
     instruments_sub = instruments.add_subparsers(dest="instruments_command", required=True)
@@ -154,6 +161,18 @@ def build_parser() -> argparse.ArgumentParser:
     dashboard_prepare.add_argument("--macro-reference", default="data/reference/macro_indicators.csv")
     dashboard_prepare.add_argument("--stock-limit", type=int, default=32)
     _add_common_flags(dashboard_prepare)
+    dashboard_prepare_live = dashboard_sub.add_parser("prepare-live", help="Validar preparo de dados live sem misturar silenciosamente")
+    dashboard_prepare_live.add_argument("--years", type=int, default=4)
+    dashboard_prepare_live.add_argument("--symbols", type=_symbols_arg, default=None)
+    dashboard_prepare_live.add_argument("--asset-type", type=_asset_type_arg, default=None)
+    dashboard_prepare_live.add_argument("--allow-mixed", action="store_true", help="Permitir dataset misto explicitamente")
+    dashboard_prepare_live.add_argument("--replace-demo", action="store_true", help="Solicitar substituicao explicita de demo por live")
+    dashboard_prepare_live.add_argument("--stock-reference", default="data/reference/top100_stocks.csv")
+    dashboard_prepare_live.add_argument("--currency-reference", default="data/reference/currencies.csv")
+    dashboard_prepare_live.add_argument("--crypto-reference", default="data/reference/crypto_assets.csv")
+    dashboard_prepare_live.add_argument("--macro-reference", default="data/reference/macro_indicators.csv")
+    dashboard_prepare_live.add_argument("--stock-limit", type=int, default=32)
+    _add_common_flags(dashboard_prepare_live)
     dashboard_audit = dashboard_sub.add_parser("audit", help="Auditar prontidao dos dados do dashboard")
     dashboard_audit.add_argument("--expected-years", type=int, default=4)
     _add_common_flags(dashboard_audit)
@@ -198,6 +217,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_daily(settings=settings, base=args.base, symbols=args.symbols)
     if args.command == "status":
         return run_status(settings=settings, last=args.last)
+    if args.command == "providers" and args.providers_command == "status":
+        return print_providers_status(settings=settings, test_external=args.test_external)
     if args.command == "instruments" and args.instruments_command == "import":
         return run_import_instruments(settings=settings, file_path=args.file)
     if args.command == "stocks" and args.stocks_command == "daily":
@@ -231,6 +252,20 @@ def main(argv: list[str] | None = None) -> int:
             settings=settings,
             years=args.years,
             demo=True,
+            stock_reference=args.stock_reference,
+            currency_reference=args.currency_reference,
+            crypto_reference=args.crypto_reference,
+            macro_reference=args.macro_reference,
+            stock_limit=args.stock_limit,
+        )
+    if args.command == "dashboard" and args.dashboard_command == "prepare-live":
+        return run_prepare_live_dashboard(
+            settings=settings,
+            years=args.years,
+            allow_mixed=args.allow_mixed,
+            replace_demo=args.replace_demo,
+            symbols=args.symbols,
+            asset_type=args.asset_type,
             stock_reference=args.stock_reference,
             currency_reference=args.currency_reference,
             crypto_reference=args.crypto_reference,

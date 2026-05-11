@@ -151,6 +151,7 @@ public class InstrumentTableController {
         table.getColumns().add(styledColumn("Name", row -> row.name(), "name-cell"));
         table.getColumns().add(column("Asset", row -> row.assetType()));
         table.getColumns().add(column("Display / Unit", row -> row.displayPairOrUnit()));
+        table.getColumns().add(column("Source", row -> row.sourceLabel()));
         table.getColumns().add(column("Exchange", row -> row.exchange()));
         table.getColumns().add(styledColumn("Latest Price", WatchRow::formattedPrice, "numeric-cell"));
         table.getColumns().add(styledColumn("% Change", row -> FormatUtils.percent(row.percentChange()), "numeric-cell", "movement-cell"));
@@ -373,9 +374,53 @@ public class InstrumentTableController {
         public String displayPairOrUnit() {
             String pair = displayPair();
             if (pair != null && !pair.isBlank()) {
-                return pair;
+                return pair + unitSuffix();
             }
             return FormatUtils.text(displayUnit());
+        }
+
+        public String sourceLabel() {
+            String mode = dataMode();
+            String provider = provider();
+            if ("live".equalsIgnoreCase(mode) && provider != null && !provider.isBlank()) {
+                return "Live / " + provider;
+            }
+            if ("demo".equalsIgnoreCase(mode)) {
+                return "Demo";
+            }
+            if ("mixed".equalsIgnoreCase(mode)) {
+                return "Mixed";
+            }
+            return "Unknown";
+        }
+
+        public String dataMode() {
+            if (quote != null && quote.dataMode() != null && !quote.dataMode().isBlank()) {
+                return quote.dataMode();
+            }
+            if (analysis != null && analysis.dataMode() != null && !analysis.dataMode().isBlank()) {
+                return analysis.dataMode();
+            }
+            return instrument.dataMode();
+        }
+
+        public String provider() {
+            if (quote != null && quote.provider() != null && !quote.provider().isBlank()) {
+                return quote.provider();
+            }
+            return instrument.provider();
+        }
+
+        private String unitSuffix() {
+            String unit = displayUnit();
+            if (unit == null || unit.isBlank()) {
+                return "";
+            }
+            String pair = displayPair();
+            if (pair != null && pair.contains(unit)) {
+                return "";
+            }
+            return " / " + unit;
         }
 
         public boolean active() {

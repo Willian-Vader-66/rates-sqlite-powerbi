@@ -27,4 +27,4 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.pytest.ini_options]
-addopts = "--basetemp=.tmp/pytest"
+addopts = "--basetemp=.pytest-tmp"

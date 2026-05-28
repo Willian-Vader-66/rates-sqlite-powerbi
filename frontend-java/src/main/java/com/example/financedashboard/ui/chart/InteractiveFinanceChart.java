@@ -35,7 +35,7 @@ public class InteractiveFinanceChart extends StackPane {
     private String valueFormat = "";
     private String displayUnit = "";
     private String tooltipLabel = "";
-    private String emptyMessage = "No historical data available.\nRun: python -m fx_rates dashboard prepare-demo --years 4 --demo";
+    private String emptyMessage = "No historical data available.\nRun: python -m fx_rates dashboard build-live-db --days 365 --db-path .tmp/live-main-candidate.sqlite --external-test --allow-partial";
     private Double hoverX;
 
     public InteractiveFinanceChart() {

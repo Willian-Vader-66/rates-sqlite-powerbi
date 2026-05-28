@@ -13,6 +13,7 @@ from typing import Any, Callable, Protocol
 import requests
 
 from .models import MacroIndicatorDailyRow
+from .redaction import redact_params
 from .utils import parse_yyyy_mm_dd, utc_now_iso
 
 logger = logging.getLogger(__name__)
@@ -109,7 +110,7 @@ class BcbSgsProvider:
         url = f"{self.base_url}.{provider_code}/dados"
         for attempt in range(self.max_retries + 1):
             self.rate_limiter.wait()
-            logger.info("provider_call provider=%s endpoint=%s params=%s", self.name, provider_code, params)
+            logger.info("provider_call provider=%s endpoint=%s params=%s", self.name, provider_code, redact_params(params))
             try:
                 response = self.session.get(url, params=params, timeout=self.timeout_seconds)
             except requests.RequestException:

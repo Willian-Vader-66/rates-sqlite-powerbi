@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import date
+import os
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -21,14 +22,18 @@ IMPORTANT_SERIES = [
     ("STOCK", "AMZN"),
 ]
 
+QUOTE_HISTORY_WARN_PCT = float(os.getenv("LIVE_QUOTE_WARN_PCT", "1.0"))
+QUOTE_HISTORY_FAIL_PCT = float(os.getenv("LIVE_QUOTE_FAIL_PCT", "5.0"))
+QUOTE_STALE_DAYS = int(os.getenv("LIVE_QUOTE_STALE_DAYS", "10"))
 
-def run_dashboard_audit(db_path: str, expected_years: int = 4) -> int:
+
+def run_dashboard_audit(db_path: str, expected_years: int = 1) -> int:
     audit = audit_dashboard(db_path, expected_years=expected_years)
     print(format_dashboard_audit(audit))
     return 1 if audit["alerts"] else 0
 
 
-def audit_dashboard(db_path: str, expected_years: int = 4) -> dict[str, Any]:
+def audit_dashboard(db_path: str, expected_years: int = 1) -> dict[str, Any]:
     path = Path(db_path).expanduser().resolve()
     if not path.exists():
         return {
@@ -61,7 +66,8 @@ def audit_dashboard(db_path: str, expected_years: int = 4) -> dict[str, Any]:
         duplicate_instruments = _duplicates(conn, "instruments", "asset_type, symbol")
         duplicate_quotes = _duplicates(conn, "market_quotes_latest", "asset_type, symbol")
         quote_consistency = [_quote_consistency(conn, asset_type, label) for asset_type, label in IMPORTANT_SERIES]
-        suspicious_values = _suspicious_values(conn)
+        suspicious_values = _suspicious_values(conn, expected_years=expected_years)
+        conflicting_data_modes = _conflicting_data_modes(conn)
 
     total_instruments = sum(instruments_by_type.values())
     alerts = _alerts(
@@ -74,6 +80,7 @@ def audit_dashboard(db_path: str, expected_years: int = 4) -> dict[str, Any]:
         duplicate_quotes=duplicate_quotes,
         quote_consistency=quote_consistency,
         suspicious_values=suspicious_values,
+        conflicting_data_modes=conflicting_data_modes,
     )
     if status["is_empty"]:
         alerts.append("SQLite database is empty")
@@ -98,6 +105,7 @@ def audit_dashboard(db_path: str, expected_years: int = 4) -> dict[str, Any]:
         "duplicate_quotes": duplicate_quotes,
         "quote_consistency": quote_consistency,
         "suspicious_values": suspicious_values,
+        "conflicting_data_modes": conflicting_data_modes,
         "alerts": alerts,
     }
 
@@ -131,10 +139,10 @@ def format_dashboard_audit(audit: dict[str, Any]) -> str:
     for label, coverage in audit["important_ranges"].items():
         lines.append(f"  {label}: {_format_range(coverage)}")
     lines.append("Quote consistency examples:")
-    lines.append("  symbol asset_type latest_quote last_history ratio rows date_min date_max status")
+    lines.append("  symbol asset_type latest_quote last_history ratio rows date_min date_max quote_time status flags")
     for item in audit["quote_consistency"]:
         lines.append(
-            "  {symbol} {asset_type} {latest_quote} {last_history} {ratio} {rows} {date_min} {date_max} {status}".format(
+            "  {symbol} {asset_type} {latest_quote} {last_history} {ratio} {rows} {date_min} {date_max} {quote_time} {status} {flags}".format(
                 symbol=item["symbol"],
                 asset_type=item["asset_type"],
                 latest_quote=_format_number(item["latest_quote"]),
@@ -143,7 +151,9 @@ def format_dashboard_audit(audit: dict[str, Any]) -> str:
                 rows=item["historical_rows"],
                 date_min=item["date_min"] or "-",
                 date_max=item["date_max"] or "-",
+                quote_time=item.get("quote_time") or "-",
                 status=item["status"],
+                flags=",".join(item.get("flags") or []) or "-",
             )
         )
     lines.append(f"Instruments without quote: {len(audit['missing_quotes'])}")
@@ -151,6 +161,7 @@ def format_dashboard_audit(audit: dict[str, Any]) -> str:
     lines.append(f"Duplicate instruments: {len(audit['duplicate_instruments'])}")
     lines.append(f"Duplicate quotes: {len(audit['duplicate_quotes'])}")
     lines.append(f"Suspicious values: {len(audit['suspicious_values'])}")
+    lines.append(f"Conflicting data modes: {len(audit.get('conflicting_data_modes', []))}")
     for item in audit["suspicious_values"][:12]:
         lines.append(f"  WARN: {item}")
     if audit["alerts"]:
@@ -188,63 +199,89 @@ def _range(conn: sqlite3.Connection, table: str, column: str, where: str = "") -
 def _important_range(conn: sqlite3.Connection, asset_type: str, label: str) -> dict[str, Any]:
     if asset_type == "FX":
         base, symbol = label.split("/")
-        return _range_params(conn, "fx_rates", "date", "WHERE base=? AND symbol=?", [base, symbol])
+        mode = _preferred_mode(conn, "fx_rates", "base=? AND symbol=?", [base, symbol])
+        return _range_params(conn, "fx_rates", "date", "WHERE base=? AND symbol=?" + (" AND data_mode=?" if mode else ""), [base, symbol] + ([mode] if mode else []))
     if asset_type == "CRYPTO":
-        return _range_params(conn, "crypto_prices_daily", "date", "WHERE symbol=?", [label])
+        mode = _preferred_mode(conn, "crypto_prices_daily", "symbol=?", [label])
+        return _range_params(conn, "crypto_prices_daily", "date", "WHERE symbol=?" + (" AND data_mode=?" if mode else ""), [label] + ([mode] if mode else []))
     if asset_type == "MACRO":
-        return _range_params(conn, "macro_indicators_daily", "date", "WHERE indicator_code=?", [label])
-    return _range_params(conn, "stock_prices_daily", "date", "WHERE symbol=?", [label])
+        mode = _preferred_mode(conn, "macro_indicators_daily", "indicator_code=?", [label])
+        return _range_params(conn, "macro_indicators_daily", "date", "WHERE indicator_code=?" + (" AND data_mode=?" if mode else ""), [label] + ([mode] if mode else []))
+    mode = _preferred_mode(conn, "stock_prices_daily", "symbol=?", [label])
+    return _range_params(conn, "stock_prices_daily", "date", "WHERE symbol=?" + (" AND data_mode=?" if mode else ""), [label] + ([mode] if mode else []))
 
 
 def _quote_consistency(conn: sqlite3.Connection, asset_type: str, label: str) -> dict[str, Any]:
     symbol = label
     quote_exchange: str | None = None
+    mode: str | None
     if asset_type == "FX":
         base, symbol = label.split("/")
         quote_exchange = base
+        mode = _preferred_mode(conn, "fx_rates", "base=? AND symbol=?", [base, symbol])
         history = _last_history_value(
             conn,
             "fx_rates",
             "rate",
-            "WHERE base=? AND symbol=?",
-            [base, symbol],
+            "WHERE base=? AND symbol=?" + (" AND data_mode=?" if mode else ""),
+            [base, symbol] + ([mode] if mode else []),
         )
     elif asset_type == "CRYPTO":
+        mode = _preferred_mode(conn, "crypto_prices_daily", "symbol=?", [symbol])
         history = _last_history_value(
             conn,
             "crypto_prices_daily",
             "price_usd",
-            "WHERE symbol=?",
-            [symbol],
+            "WHERE symbol=?" + (" AND data_mode=?" if mode else ""),
+            [symbol] + ([mode] if mode else []),
         )
     elif asset_type == "MACRO":
+        mode = _preferred_mode(conn, "macro_indicators_daily", "indicator_code=?", [symbol])
         history = _last_history_value(
             conn,
             "macro_indicators_daily",
             "value",
-            "WHERE indicator_code=?",
-            [symbol],
+            "WHERE indicator_code=?" + (" AND data_mode=?" if mode else ""),
+            [symbol] + ([mode] if mode else []),
         )
     else:
+        mode = _preferred_mode(conn, "stock_prices_daily", "symbol=?", [symbol])
         history = _last_history_value(
             conn,
             "stock_prices_daily",
             "close",
-            "WHERE symbol=?",
-            [symbol],
+            "WHERE symbol=?" + (" AND data_mode=?" if mode else ""),
+            [symbol] + ([mode] if mode else []),
         )
 
-    quote = _latest_quote_value(conn, asset_type, symbol, quote_exchange)
+    quote = _latest_quote_value(conn, asset_type, symbol, quote_exchange, mode)
     latest_quote = quote["price"]
     last_history = history["value"]
     ratio = latest_quote / last_history if latest_quote is not None and last_history not in {None, 0} else None
+    diff_pct = abs(ratio - 1.0) * 100.0 if ratio is not None else None
+    flags: list[str] = []
     status = "OK"
     if latest_quote is None or last_history is None:
         status = "WARN"
-    elif ratio is None or ratio > 2.0 or ratio < 0.5:
+        flags.append("MISSING_QUOTE_OR_HISTORY")
+    elif diff_pct is None:
         status = "FAIL"
-    elif ratio > 1.05 or ratio < 0.95:
+        flags.append("QUOTE_HISTORY_RATIO_INVALID")
+    elif diff_pct > QUOTE_HISTORY_FAIL_PCT:
+        status = "FAIL"
+        flags.append("QUOTE_HISTORY_DIVERGENCE_FAIL")
+    elif diff_pct > QUOTE_HISTORY_WARN_PCT:
         status = "WARN"
+        flags.append("QUOTE_HISTORY_DIVERGENCE_WARN")
+    if quote.get("quote_time") and history.get("date_max") and str(quote["quote_time"])[:10] < str(history["date_max"])[:10]:
+        status = "FAIL"
+        flags.append("QUOTE_OLDER_THAN_HISTORY")
+    if _is_future_date(history.get("date_max")) or _is_future_date(quote.get("quote_time")):
+        status = "FAIL"
+        flags.append("FUTURE_HISTORY_OR_QUOTE_DATE")
+    if _is_stale_date(quote.get("quote_time") or history.get("date_max")) and status != "FAIL":
+        status = "WARN"
+        flags.append("STALE_LATEST_QUOTE")
     return {
         "label": label,
         "symbol": symbol,
@@ -252,9 +289,13 @@ def _quote_consistency(conn: sqlite3.Connection, asset_type: str, label: str) ->
         "latest_quote": latest_quote,
         "last_history": last_history,
         "ratio": ratio,
+        "diff_pct": diff_pct,
         "historical_rows": history["count"],
         "date_min": history["date_min"],
         "date_max": history["date_max"],
+        "quote_time": quote.get("quote_time"),
+        "data_mode": mode,
+        "flags": sorted(set(flags)),
         "status": status,
     }
 
@@ -288,28 +329,51 @@ def _latest_quote_value(
     asset_type: str,
     symbol: str,
     exchange: str | None,
+    preferred_mode: str | None = None,
 ) -> dict[str, Any]:
     params: list[Any] = [asset_type, symbol]
     exchange_clause = ""
     if exchange is not None:
         exchange_clause = "AND exchange = ?"
         params.append(exchange)
+    mode_clause = ""
+    if preferred_mode:
+        mode_clause = "AND data_mode = ?"
+        params.append(preferred_mode)
     row = conn.execute(
         f"""
-        SELECT price, bid, ask, quote_time
+        SELECT price, bid, ask, quote_time, data_mode, provider
         FROM market_quotes_latest
-        WHERE asset_type=? AND symbol=? {exchange_clause}
-        ORDER BY fetched_at DESC, quote_time DESC
+        WHERE asset_type=? AND symbol=? {exchange_clause} {mode_clause}
+        ORDER BY CASE data_mode WHEN 'live' THEN 0 WHEN 'demo' THEN 1 ELSE 2 END, fetched_at DESC, quote_time DESC
         LIMIT 1
         """,
         params,
     ).fetchone()
     if row is None:
-        return {"price": None, "bid": None, "ask": None, "quote_time": None}
-    return {"price": row[0], "bid": row[1], "ask": row[2], "quote_time": row[3]}
+        return {"price": None, "bid": None, "ask": None, "quote_time": None, "data_mode": None, "provider": None}
+    return {"price": row[0], "bid": row[1], "ask": row[2], "quote_time": row[3], "data_mode": row[4], "provider": row[5]}
 
 
-def _suspicious_values(conn: sqlite3.Connection) -> list[str]:
+def _is_future_date(raw_date: str | None) -> bool:
+    if not raw_date:
+        return False
+    try:
+        return date.fromisoformat(str(raw_date)[:10]) > date.today() + timedelta(days=1)
+    except ValueError:
+        return False
+
+
+def _is_stale_date(raw_date: str | None) -> bool:
+    if not raw_date:
+        return False
+    try:
+        return (date.today() - date.fromisoformat(str(raw_date)[:10])).days > QUOTE_STALE_DAYS
+    except ValueError:
+        return True
+
+
+def _suspicious_values(conn: sqlite3.Connection, *, expected_years: int) -> list[str]:
     checks: list[str] = []
     checks.extend(
         _format_rows(
@@ -372,9 +436,13 @@ def _suspicious_values(conn: sqlite3.Connection) -> list[str]:
             "MACRO unit missing",
         )
     )
-    checks.extend(_short_series(conn, "stock_prices_daily", "symbol", None, 700, "STOCK series under 700 points"))
-    checks.extend(_short_series(conn, "crypto_prices_daily", "symbol", None, 1400, "CRYPTO series under 1400 points"))
-    checks.extend(_short_series(conn, "fx_rates", "symbol", "base", 1400, "FX series under 1400 points"))
+    years = max(1, expected_years)
+    stock_min = max(2, int(180 * years * 0.70))
+    crypto_min = max(2, int(330 * years * 0.70))
+    fx_min = max(2, int(240 * years * 0.70))
+    checks.extend(_short_series(conn, "stock_prices_daily", "symbol", None, stock_min, f"STOCK series under {stock_min} points"))
+    checks.extend(_short_series(conn, "crypto_prices_daily", "symbol", None, crypto_min, f"CRYPTO series under {crypto_min} points"))
+    checks.extend(_short_series(conn, "fx_rates", "symbol", "base", fx_min, f"FX series under {fx_min} points"))
     return checks
 
 
@@ -414,6 +482,40 @@ def _short_series(
             (min_count,),
         ).fetchall()
     return [f"{prefix}: {row[0]} has {row[1]} points" for row in rows]
+
+
+def _preferred_mode(conn: sqlite3.Connection, table: str, where: str, params: list[Any]) -> str | None:
+    rows = conn.execute(f"SELECT DISTINCT COALESCE(data_mode, 'unknown') FROM {table} WHERE {where}", params).fetchall()
+    modes = {str(row[0] or "unknown").lower() for row in rows}
+    if "live" in modes:
+        return "live"
+    if "demo" in modes:
+        return "demo"
+    return None
+
+
+def _conflicting_data_modes(conn: sqlite3.Connection) -> list[str]:
+    checks = []
+    specs = [
+        ("stock_prices_daily", "STOCK", "symbol"),
+        ("crypto_prices_daily", "CRYPTO", "symbol"),
+        ("macro_indicators_daily", "MACRO", "indicator_code"),
+        ("fx_rates", "FX", "base || '/' || symbol"),
+        ("market_quotes_latest", "QUOTE", "asset_type || ':' || symbol"),
+        ("analysis_snapshots", "ANALYSIS", "asset_type || ':' || symbol"),
+    ]
+    for table, label, expr in specs:
+        rows = conn.execute(
+            f"""
+            SELECT {expr} AS symbol, COUNT(DISTINCT COALESCE(data_mode, 'unknown')) AS modes
+            FROM {table}
+            GROUP BY {expr}
+            HAVING modes > 1
+            ORDER BY symbol
+            """
+        ).fetchall()
+        checks.extend(f"{label} conflicting data_mode: {row[0]}" for row in rows)
+    return checks
 
 
 def _range_params(conn: sqlite3.Connection, table: str, column: str, where: str, params: list[str]) -> dict[str, Any]:
@@ -467,6 +569,7 @@ def _alerts(
     duplicate_quotes: list[str],
     quote_consistency: list[dict[str, Any]],
     suspicious_values: list[str],
+    conflicting_data_modes: list[str],
 ) -> list[str]:
     alerts: list[str] = []
     if missing_quotes:
@@ -486,6 +589,8 @@ def _alerts(
         alerts.append(f"quote/history ratio failed for: {labels}")
     if suspicious_values:
         alerts.append(f"{len(suspicious_values)} suspicious data/display values found")
+    if conflicting_data_modes:
+        alerts.append(f"{len(conflicting_data_modes)} symbols have conflicting demo/live modes")
     return alerts
 
 

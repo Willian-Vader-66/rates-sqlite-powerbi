@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import urllib.error
 import urllib.request
@@ -44,12 +45,16 @@ SAMPLE_SYMBOLS = [
     ("STOCK", "AAPL"), ("STOCK", "AMZN"), ("STOCK", "MSFT"), ("STOCK", "NVDA"), ("STOCK", "BRK.B"),
     ("MACRO", "SELIC_DAILY"), ("MACRO", "SELIC_ANNUALIZED_MONTHLY"), ("MACRO", "IPCA_MONTHLY"), ("MACRO", "FED_FUNDS_DAILY"),
 ]
+QUOTE_HISTORY_WARN_PCT = float(os.getenv("LIVE_QUOTE_WARN_PCT", "1.0"))
+QUOTE_HISTORY_FAIL_PCT = float(os.getenv("LIVE_QUOTE_FAIL_PCT", "5.0"))
+QUOTE_STALE_DAYS = int(os.getenv("LIVE_QUOTE_STALE_DAYS", "10"))
+MACRO_MONTHLY_STALE_DAYS = int(os.getenv("MACRO_MONTHLY_STALE_DAYS", "75"))
 
 
 def run_market_audit(db_path: str, *, with_live_sample: bool = False, output_json: bool = False) -> int:
     audit = audit_market(db_path, with_live_sample=with_live_sample)
     print(json.dumps(audit, indent=2, ensure_ascii=False) if output_json else format_market_audit(audit))
-    hard_fail_flags = {"NO_HISTORY", "NO_LATEST_QUOTE", "FX_SUSPICIOUS_RANGE", "STOCK_SUSPICIOUS_RANGE", "STOCK_UNIT_SUSPICIOUS", "CRYPTO_SUSPICIOUS_RANGE", "CRYPTO_UNIT_SUSPICIOUS", "MACRO_UNIT_SUSPICIOUS", "INCONSISTENT_30D_CHANGE", "INCONSISTENT_90D_CHANGE", "TOP_WORST_RANKING_BUG"}
+    hard_fail_flags = {"NO_HISTORY", "NO_LATEST_QUOTE", "FX_SUSPICIOUS_RANGE", "STOCK_SUSPICIOUS_RANGE", "STOCK_UNIT_SUSPICIOUS", "CRYPTO_SUSPICIOUS_RANGE", "CRYPTO_UNIT_SUSPICIOUS", "MACRO_UNIT_SUSPICIOUS", "INCONSISTENT_30D_CHANGE", "INCONSISTENT_90D_CHANGE", "TOP_WORST_RANKING_BUG", "QUOTE_HISTORY_DIVERGENCE_FAIL", "QUOTE_OLDER_THAN_HISTORY", "FUTURE_HISTORY_DATE", "LIVE_WITH_DEMO_PROVIDER", "DEMO_WITH_LIVE_PROVIDER", "CONFLICTING_DATA_MODES", "QUOTE_MODE_MISMATCH", "ANALYSIS_MODE_MISMATCH"}
     has_item_failure = any(hard_fail_flags.intersection(item["flags"]) for item in audit.get("items", []))
     has_health_failure = audit.get("data_health", {}).get("status") == "FAIL"
     return 1 if has_item_failure or has_health_failure else 0
@@ -102,9 +107,13 @@ def _audit_instrument(conn: sqlite3.Connection, instrument: dict[str, Any]) -> d
     asset_type = str(instrument["asset_type"]).upper()
     symbol = str(instrument["symbol"]).upper()
     exchange = instrument.get("exchange")
-    latest = _latest_quote(conn, asset_type, symbol, exchange)
+    history_modes = _history_modes(conn, asset_type, symbol, exchange)
+    preferred_history_mode = _preferred_mode_for_asset(conn, asset_type, symbol, exchange)
+    latest = _latest_quote(conn, asset_type, symbol, exchange, preferred_history_mode)
     history = _history(conn, asset_type, symbol, exchange)
-    analysis = _latest_analysis(conn, asset_type, symbol)
+    analysis = _latest_analysis(conn, asset_type, symbol, preferred_history_mode)
+    quote_modes = _quote_modes(conn, asset_type, symbol, exchange)
+    analysis_modes = _analysis_modes(conn, asset_type, symbol)
     metadata = build_display_metadata(
         symbol=symbol,
         asset_type=asset_type,
@@ -126,10 +135,26 @@ def _audit_instrument(conn: sqlite3.Connection, instrument: dict[str, Any]) -> d
         flags.append("NO_LATEST_QUOTE")
     if not analysis:
         flags.append("NO_ANALYSIS")
-    if _is_stale(latest_date):
+    if _is_stale(asset_type, symbol, latest_date):
         flags.append("STALE_DATA")
     flags.extend(_range_flags(asset_type, symbol, exchange, latest_value, metadata.get("display_unit")))
     flags.extend(_source_unit_flags(asset_type, history.get("unit")))
+    if len(history_modes) > 1 or len(quote_modes) > 1 or len(analysis_modes) > 1:
+        flags.append("CONFLICTING_DATA_MODES")
+    if latest and history.get("latest_value") not in (None, 0) and latest.get("price") is not None:
+        diff_pct = abs((float(latest["price"]) / float(history["latest_value"])) - 1.0) * 100.0
+        if diff_pct > QUOTE_HISTORY_FAIL_PCT:
+            flags.append("QUOTE_HISTORY_DIVERGENCE_FAIL")
+        elif diff_pct > QUOTE_HISTORY_WARN_PCT:
+            flags.append("QUOTE_HISTORY_DIVERGENCE_WARN")
+        if latest.get("quote_time") and history.get("history_end") and str(latest["quote_time"])[:10] < str(history["history_end"])[:10]:
+            flags.append("QUOTE_OLDER_THAN_HISTORY")
+    if _has_future_date(history.get("history_end")):
+        flags.append("FUTURE_HISTORY_DATE")
+    if preferred_history_mode and latest and str(latest.get("data_mode") or "").lower() != preferred_history_mode:
+        flags.append("QUOTE_MODE_MISMATCH")
+    if preferred_history_mode and analysis_modes and preferred_history_mode not in analysis_modes:
+        flags.append("ANALYSIS_MODE_MISMATCH")
     if _differs(change_30d, analysis.get("change_30d") if analysis else None):
         flags.append("INCONSISTENT_30D_CHANGE")
     if _differs(change_90d, analysis.get("change_90d") if analysis else None):
@@ -138,6 +163,10 @@ def _audit_instrument(conn: sqlite3.Connection, instrument: dict[str, Any]) -> d
     row_mode = (latest.get("data_mode") if latest else None) or history.get("data_mode") or instrument.get("data_mode")
     if not row_mode:
         row_mode = "demo" if _is_demo_provider(provider) else "unknown"
+    if row_mode == "live" and _is_demo_provider(provider):
+        flags.append("LIVE_WITH_DEMO_PROVIDER")
+    if row_mode == "demo" and provider and "twelvedata" in str(provider).lower():
+        flags.append("DEMO_WITH_LIVE_PROVIDER")
     return {
         "asset_type": asset_type,
         "symbol": symbol,
@@ -164,42 +193,118 @@ def _audit_instrument(conn: sqlite3.Connection, instrument: dict[str, Any]) -> d
     }
 
 
-def _latest_quote(conn: sqlite3.Connection, asset_type: str, symbol: str, exchange: str | None) -> dict[str, Any] | None:
+def _preferred_mode(conn: sqlite3.Connection, table: str, where: str, params: list[Any]) -> str | None:
+    rows = conn.execute(f"SELECT DISTINCT COALESCE(data_mode, 'unknown') FROM {table} WHERE {where}", params).fetchall()
+    modes = {str(row[0] or "unknown").lower() for row in rows}
+    if "live" in modes:
+        return "live"
+    if "demo" in modes:
+        return "demo"
+    return None
+
+
+def _history_modes(conn: sqlite3.Connection, asset_type: str, symbol: str, exchange: str | None) -> set[str]:
+    if asset_type == "FX":
+        rows = conn.execute("SELECT DISTINCT COALESCE(data_mode, 'unknown') FROM fx_rates WHERE base=? AND symbol=?", (exchange or "USD", symbol)).fetchall()
+    elif asset_type == "CRYPTO":
+        rows = conn.execute("SELECT DISTINCT COALESCE(data_mode, 'unknown') FROM crypto_prices_daily WHERE symbol=?", (symbol,)).fetchall()
+    elif asset_type == "MACRO":
+        rows = conn.execute("SELECT DISTINCT COALESCE(data_mode, 'unknown') FROM macro_indicators_daily WHERE indicator_code=?", (symbol,)).fetchall()
+    else:
+        rows = conn.execute("SELECT DISTINCT COALESCE(data_mode, 'unknown') FROM stock_prices_daily WHERE symbol=?", (symbol,)).fetchall()
+    return {str(row[0] or "unknown").lower() for row in rows}
+
+
+def _quote_modes(conn: sqlite3.Connection, asset_type: str, symbol: str, exchange: str | None) -> set[str]:
     params: list[Any] = [asset_type, symbol]
     clause = "asset_type=? AND symbol=?"
     if asset_type == "FX" and exchange:
         clause += " AND exchange=?"
         params.append(exchange)
+    rows = conn.execute(f"SELECT DISTINCT COALESCE(data_mode, 'unknown') FROM market_quotes_latest WHERE {clause}", params).fetchall()
+    return {str(row[0] or "unknown").lower() for row in rows}
+
+
+def _has_future_date(raw_date: str | None) -> bool:
+    if not raw_date:
+        return False
+    try:
+        return date.fromisoformat(str(raw_date)[:10]) > date.today() + timedelta(days=1)
+    except ValueError:
+        return False
+
+
+def _preferred_mode_for_asset(conn: sqlite3.Connection, asset_type: str, symbol: str, exchange: str | None) -> str | None:
+    if asset_type == "FX":
+        return _preferred_mode(conn, "fx_rates", "symbol=? AND base=?", [symbol, exchange or "USD"])
+    if asset_type == "CRYPTO":
+        return _preferred_mode(conn, "crypto_prices_daily", "symbol=?", [symbol])
+    if asset_type == "MACRO":
+        return _preferred_mode(conn, "macro_indicators_daily", "indicator_code=?", [symbol])
+    return _preferred_mode(conn, "stock_prices_daily", "symbol=?", [symbol])
+
+
+def _analysis_modes(conn: sqlite3.Connection, asset_type: str, symbol: str) -> set[str]:
+    rows = conn.execute(
+        "SELECT DISTINCT COALESCE(data_mode, 'unknown') FROM analysis_snapshots WHERE asset_type=? AND symbol=?",
+        (asset_type, symbol),
+    ).fetchall()
+    return {str(row[0] or "unknown").lower() for row in rows}
+
+
+def _latest_quote(conn: sqlite3.Connection, asset_type: str, symbol: str, exchange: str | None, preferred_mode: str | None = None) -> dict[str, Any] | None:
+    params: list[Any] = [asset_type, symbol]
+    clause = "asset_type=? AND symbol=?"
+    if asset_type == "FX" and exchange:
+        clause += " AND exchange=?"
+        params.append(exchange)
+    if preferred_mode:
+        clause += " AND data_mode=?"
+        params.append(preferred_mode)
     row = conn.execute(f"""
         SELECT price, quote_time, provider, fetched_at, percent_change, data_mode, source_updated_at
         FROM market_quotes_latest
         WHERE {clause}
-        ORDER BY fetched_at DESC, quote_time DESC
+        ORDER BY CASE data_mode WHEN 'live' THEN 0 WHEN 'demo' THEN 1 ELSE 2 END, fetched_at DESC, quote_time DESC
         LIMIT 1
     """, params).fetchone()
     return dict(row) if row else None
 
 
-def _latest_analysis(conn: sqlite3.Connection, asset_type: str, symbol: str) -> dict[str, Any] | None:
-    row = conn.execute("""
-        SELECT change_30d, change_90d, change_1y, generated_at, trend, signal
+def _latest_analysis(conn: sqlite3.Connection, asset_type: str, symbol: str, preferred_mode: str | None = None) -> dict[str, Any] | None:
+    params: list[Any] = [asset_type, symbol]
+    mode_clause = ""
+    if preferred_mode:
+        mode_clause = " AND data_mode=?"
+        params.append(preferred_mode)
+    row = conn.execute(f"""
+        SELECT change_30d, change_90d, change_1y, generated_at, trend, signal, data_mode
         FROM analysis_snapshots
-        WHERE asset_type=? AND symbol=?
+        WHERE asset_type=? AND symbol=?{mode_clause}
         ORDER BY generated_at DESC, snapshot_id DESC
         LIMIT 1
-    """, (asset_type, symbol)).fetchone()
+    """, params).fetchone()
     return dict(row) if row else None
 
 
 def _history(conn: sqlite3.Connection, asset_type: str, symbol: str, exchange: str | None) -> dict[str, Any]:
     if asset_type == "FX":
-        rows = conn.execute("SELECT date, rate AS value, source AS provider, NULL AS unit, data_mode FROM fx_rates WHERE base=? AND symbol=? AND rate IS NOT NULL ORDER BY date", (exchange or "USD", symbol)).fetchall()
+        preferred = _preferred_mode(conn, "fx_rates", "symbol=? AND base=?", [symbol, exchange or "USD"])
+        mode_clause = " AND data_mode=?" if preferred else ""
+        params = [exchange or "USD", symbol] + ([preferred] if preferred else [])
+        rows = conn.execute(f"SELECT date, rate AS value, source AS provider, NULL AS unit, data_mode FROM fx_rates WHERE base=? AND symbol=? AND rate IS NOT NULL{mode_clause} ORDER BY date", params).fetchall()
     elif asset_type == "CRYPTO":
-        rows = conn.execute("SELECT date, price_usd AS value, provider, NULL AS unit, data_mode FROM crypto_prices_daily WHERE symbol=? AND price_usd IS NOT NULL ORDER BY date", (symbol,)).fetchall()
+        preferred = _preferred_mode(conn, "crypto_prices_daily", "symbol=?", [symbol])
+        mode_clause = " AND data_mode=?" if preferred else ""
+        rows = conn.execute(f"SELECT date, price_usd AS value, provider, NULL AS unit, data_mode FROM crypto_prices_daily WHERE symbol=? AND price_usd IS NOT NULL{mode_clause} ORDER BY date", [symbol] + ([preferred] if preferred else [])).fetchall()
     elif asset_type == "MACRO":
-        rows = conn.execute("SELECT date, value, source AS provider, unit, data_mode FROM macro_indicators_daily WHERE indicator_code=? AND value IS NOT NULL ORDER BY date", (symbol,)).fetchall()
+        preferred = _preferred_mode(conn, "macro_indicators_daily", "indicator_code=?", [symbol])
+        mode_clause = " AND data_mode=?" if preferred else ""
+        rows = conn.execute(f"SELECT date, value, source AS provider, unit, data_mode FROM macro_indicators_daily WHERE indicator_code=? AND value IS NOT NULL{mode_clause} ORDER BY date", [symbol] + ([preferred] if preferred else [])).fetchall()
     else:
-        rows = conn.execute("SELECT date, close AS value, provider, currency AS unit, data_mode FROM stock_prices_daily WHERE symbol=? AND close IS NOT NULL ORDER BY date", (symbol,)).fetchall()
+        preferred = _preferred_mode(conn, "stock_prices_daily", "symbol=?", [symbol])
+        mode_clause = " AND data_mode=?" if preferred else ""
+        rows = conn.execute(f"SELECT date, close AS value, provider, currency AS unit, data_mode FROM stock_prices_daily WHERE symbol=? AND close IS NOT NULL{mode_clause} ORDER BY date", [symbol] + ([preferred] if preferred else [])).fetchall()
     points = [(str(row["date"]), float(row["value"])) for row in rows if row["value"] is not None]
     return {
         "points": points,
@@ -276,14 +381,24 @@ def _differs(calculated_pct: float | None, stored_ratio: float | None) -> bool:
     return abs(calculated_pct - (float(stored_ratio) * 100.0)) > 0.75
 
 
-def _is_stale(raw_date: str | None) -> bool:
+def _is_stale(asset_type: str, symbol: str, raw_date: str | None) -> bool:
     if not raw_date:
         return True
     try:
         parsed = date.fromisoformat(raw_date[:10])
     except ValueError:
         return False
-    return (date.today() - parsed).days > 7
+    return (date.today() - parsed).days > _allowed_stale_days(asset_type, symbol)
+
+
+def _allowed_stale_days(asset_type: str, symbol: str) -> int:
+    if asset_type == "MACRO" and _is_monthly_macro(symbol):
+        return MACRO_MONTHLY_STALE_DAYS
+    return QUOTE_STALE_DAYS
+
+
+def _is_monthly_macro(symbol: str) -> bool:
+    return symbol.upper().endswith("_MONTHLY") or symbol.upper() in {"IPCA_MONTHLY", "US_CPI_MONTHLY"}
 
 
 def _is_demo_provider(provider: str | None) -> bool:

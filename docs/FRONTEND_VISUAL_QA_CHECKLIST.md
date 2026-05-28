@@ -33,7 +33,7 @@
 - Details show symbol, name, asset type, price/rate, 30D change, bid/ask, trend, signal, SMA 20/50, volatility, last update, and history coverage.
 - Changing rows updates the chart.
 - Re-selecting the same row/range does not flicker or reload repeatedly.
-- Range selector includes 30D, 90D, 6M, 1Y, and 4Y.
+- Range selector includes 30D, 90D, 180D, 1Y, and 365D.
 
 ## Interactive Chart
 
@@ -41,7 +41,7 @@
 - Hovering over the chart shows a tooltip with date, value, and change.
 - Vertical crosshair follows the nearest point.
 - Latest value marker appears on the right side of the chart.
-- 4Y range remains responsive.
+- 365D range remains responsive.
 - Empty, loading, and error states stay inside the chart area.
 
 ## Settings

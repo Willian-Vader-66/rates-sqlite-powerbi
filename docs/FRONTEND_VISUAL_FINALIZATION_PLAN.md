@@ -7,8 +7,8 @@ This pass turns Finance Monitor into a more product-like local dashboard without
 ## Defaults
 
 - Overview default period: `90D`
-- Supported chart periods: `30D`, `90D`, `6M`, `1Y`, `4Y`
-- Demo data command: `python -m fx_rates dashboard prepare-demo --years 4 --demo`
+- Supported chart periods: `30D`, `90D`, `180D`, `1Y`, `365D`
+- Demo data command: `python -m fx_rates dashboard prepare-demo --years 1 --demo`
 - Audit command: `python -m fx_rates dashboard audit`
 
 ## Technical Signals

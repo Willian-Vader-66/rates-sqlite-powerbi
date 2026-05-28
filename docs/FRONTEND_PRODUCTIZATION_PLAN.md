@@ -76,7 +76,7 @@ Top 10 Companies:
 
 Current capabilities:
 
-- 30D, 90D, 6M, 1Y, and 4Y ranges through `MarketDataService.HistoryRange`.
+- 30D, 90D, 180D, 1Y, and 365D ranges through `MarketDataService.HistoryRange`.
 - Backend history requests use start/end dates.
 - Hover tooltip with symbol, range, date, value, and previous-point percentage change.
 - Vertical crosshair.
@@ -109,7 +109,7 @@ A unified `/api/assets/{symbol}/history` endpoint is not required yet because th
 - Frontend tests and compile pass.
 - Dashboard connects to `http://127.0.0.1:8000`.
 - Watchlist and Overview remain populated after `prepare-demo`.
-- Selected instrument chart supports 30D, 90D, 6M, 1Y, and 4Y.
+- Selected instrument chart supports 30D, 90D, 180D, 1Y, and 365D.
 - Hover/crosshair behavior exists.
 - Visual treatment is more corporate and less neon.
 - Settings page exposes backend/DB diagnostics.

@@ -47,7 +47,7 @@ The Java app remains HTTP-only and does not read SQLite directly.
 ## Performance Risks
 
 - Full refresh still loads instruments, quotes, analysis, overview, fixed charts, and top stocks together. The refresh guard prevents overlap, and selected history is cached by symbol/range.
-- 4Y selected history can return more than 1,000 points. `InteractiveFinanceChart` downsamples to at most 420 rendered points to keep UI responsive.
+- 365D selected history can return more than 1,000 points. `InteractiveFinanceChart` downsamples to at most 420 rendered points to keep UI responsive.
 - Console API logs are useful during development but should become configurable before packaging.
 
 ## Chart Limitations

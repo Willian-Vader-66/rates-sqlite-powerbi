@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date, timedelta
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -38,8 +39,8 @@ def test_dashboard_display_metadata_is_explicit(monkeypatch, tmp_path: Path) -> 
         [
             "dashboard",
             "prepare-demo",
-            "--years",
-            "4",
+            "--days",
+            "365",
             "--demo",
             "--db-path",
             str(db_path),
@@ -50,7 +51,7 @@ def test_dashboard_display_metadata_is_explicit(monkeypatch, tmp_path: Path) -> 
         ]
     ) == 0
 
-    audit = audit_dashboard(str(db_path), expected_years=4)
+    audit = audit_dashboard(str(db_path), expected_years=1)
     assert audit["suspicious_values"] == []
 
     client = TestClient(create_app(_settings(str(db_path))))
@@ -79,14 +80,16 @@ def test_dashboard_display_metadata_is_explicit(monkeypatch, tmp_path: Path) -> 
     aapl_history = client.get("/api/stocks/history?symbol=AAPL").json()
     assert aapl_history["display_pair"] == "AAPL/USD"
     assert aapl_history["display_unit"] == "USD"
-    assert aapl_history["point_count"] > 1000
-    assert aapl_history["start_date"] <= "2022-05-05"
-    assert aapl_history["end_date"] >= "2026-05-03"
+    assert aapl_history["point_count"] >= 250
+    aapl_start = date.fromisoformat(aapl_history["start_date"])
+    aapl_end = date.fromisoformat(aapl_history["end_date"])
+    assert (aapl_end - aapl_start).days >= 360
+    assert aapl_end >= date.today() - timedelta(days=10)
 
     brl_history = client.get("/api/fx/history?base=USD&symbol=BRL").json()
     assert brl_history["display_pair"] == "USD/BRL"
     assert brl_history["display_unit"] == "BRL per 1 USD"
-    assert brl_history["point_count"] >= 1400
+    assert brl_history["point_count"] >= 360
 
     quote = client.get("/api/quotes/latest?symbols=AAPL&asset_type=STOCK").json()["items"][0]
     assert quote["display_pair"] == "AAPL/USD"

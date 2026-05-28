@@ -44,17 +44,25 @@ class InstrumentRow:
     created_at: str
     updated_at: str
     data_mode: str = "unknown"
+    display_name: str | None = None
+    unit_label: str | None = None
+    value_label: str | None = None
+    expected_frequency: str | None = None
 
     def as_db_dict(self) -> dict[str, str | int | None]:
         return {
             "symbol": self.symbol,
             "name": self.name,
+            "display_name": self.display_name or self.name,
             "asset_type": self.asset_type,
             "exchange": self.exchange,
             "currency": self.currency,
             "sector": self.sector,
             "provider": self.provider,
             "provider_symbol": self.provider_symbol,
+            "unit_label": self.unit_label,
+            "value_label": self.value_label,
+            "expected_frequency": self.expected_frequency,
             "is_active": self.is_active,
             "priority": self.priority,
             "created_at": self.created_at,

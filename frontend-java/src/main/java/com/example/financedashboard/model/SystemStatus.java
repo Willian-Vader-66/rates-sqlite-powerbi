@@ -23,10 +23,16 @@ public record SystemStatus(
         @JsonProperty("is_empty") Boolean empty,
         @JsonProperty("recommended_prepare_command") String recommendedPrepareCommand,
         @JsonProperty("data_mode") String dataMode,
+        @JsonProperty("requested_days") Integer requestedDays,
+        @JsonProperty("history_mode") String historyMode,
+        @JsonProperty("advanced_history_available") Boolean advancedHistoryAvailable,
+        @JsonProperty("advanced_history_enabled") Boolean advancedHistoryEnabled,
+        @JsonProperty("advanced_history_max_years") Integer advancedHistoryMaxYears,
         List<String> providers,
         @JsonProperty("provider_summary") List<ProviderSummary> providerSummary,
         Coverage coverage,
         @JsonProperty("data_mode_counts") DataModeCounts dataModeCounts,
+        @JsonProperty("data_health") DataHealth dataHealth,
         @JsonProperty("live_provider_status") LiveProviderStatus liveProviderStatus,
         @JsonProperty("data_generated_at") String dataGeneratedAt,
         @JsonProperty("data_warning") String dataWarning,
@@ -61,6 +67,16 @@ public record SystemStatus(
             List<ProviderItem> providers,
             @JsonProperty("all_configured") Boolean allConfigured,
             String recommendation
+    ) {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record DataHealth(
+            String status,
+            @JsonProperty("missing_important_symbols") List<String> missingImportantSymbols,
+            @JsonProperty("symbols_without_history") List<String> symbolsWithoutHistory,
+            @JsonProperty("symbols_without_quote") List<String> symbolsWithoutQuote,
+            @JsonProperty("repair_command") String repairCommand
     ) {
     }
 

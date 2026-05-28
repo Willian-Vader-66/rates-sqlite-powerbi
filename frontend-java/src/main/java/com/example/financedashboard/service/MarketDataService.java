@@ -132,16 +132,31 @@ public class MarketDataService {
     }
 
     public enum HistoryRange {
+        SEVEN_D("7D", 7, true),
         THIRTY_D("30D"),
         NINETY_D("90D"),
-        SIX_M("6M"),
-        ONE_Y("1Y"),
-        FOUR_Y("4Y");
+        ONE_EIGHTY_D("180D", 180, true),
+        ONE_Y("365D", 365, true),
+        THREE_Y("3Y", 1095, false),
+        FIVE_Y("5Y", 1825, false),
+        TEN_Y("10Y", 3650, false);
 
         private final String label;
+        private final int days;
+        private final boolean enabled;
 
         HistoryRange(String label) {
+            this(label, switch (label) {
+                case "30D" -> 30;
+                case "90D" -> 90;
+                default -> 365;
+            }, true);
+        }
+
+        HistoryRange(String label, int days, boolean enabled) {
             this.label = label;
+            this.days = days;
+            this.enabled = enabled;
         }
 
         public String label() {
@@ -149,23 +164,19 @@ public class MarketDataService {
         }
 
         public LocalDate startDate(LocalDate end) {
-            return switch (this) {
-                case THIRTY_D -> end.minusDays(30);
-                case NINETY_D -> end.minusDays(90);
-                case SIX_M -> end.minusMonths(6);
-                case ONE_Y -> end.minusYears(1);
-                case FOUR_Y -> end.minusYears(4);
-            };
+            return end.minusDays(days);
         }
 
         public int days() {
-            return switch (this) {
-                case THIRTY_D -> 30;
-                case NINETY_D -> 90;
-                case SIX_M -> 183;
-                case ONE_Y -> 365;
-                case FOUR_Y -> 1460;
-            };
+            return days;
+        }
+
+        public boolean enabled() {
+            return enabled;
+        }
+
+        public String disabledTooltip() {
+            return enabled ? "" : "Requires advanced history provider.";
         }
     }
 

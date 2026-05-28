@@ -137,9 +137,10 @@ def _build_stock_snapshots(db_path: str, symbols: list[str] | None) -> list[Anal
             SELECT date, symbol, exchange, close AS value, provider, data_mode, source_updated_at
             FROM stock_prices_daily
             WHERE symbol = ? AND close IS NOT NULL
+              AND data_mode = COALESCE((SELECT CASE WHEN EXISTS (SELECT 1 FROM stock_prices_daily WHERE symbol = ? AND data_mode = 'live') THEN 'live' WHEN EXISTS (SELECT 1 FROM stock_prices_daily WHERE symbol = ? AND data_mode = 'demo') THEN 'demo' END), data_mode)
             ORDER BY date
             """,
-            [symbol],
+            [symbol, symbol, symbol],
         )
         if rows:
             snapshots.append(_snapshot_from_series(symbol=symbol, asset_type="STOCK", exchange=rows[-1]["exchange"], rows=rows))
@@ -156,9 +157,10 @@ def _build_fx_snapshots(db_path: str, symbols: list[str] | None) -> list[Analysi
             SELECT date, symbol, base AS exchange, rate AS value, source AS provider, data_mode, source_updated_at
             FROM fx_rates
             WHERE base = ? AND symbol = ? AND rate IS NOT NULL
+              AND data_mode = COALESCE((SELECT CASE WHEN EXISTS (SELECT 1 FROM fx_rates WHERE base = ? AND symbol = ? AND data_mode = 'live') THEN 'live' WHEN EXISTS (SELECT 1 FROM fx_rates WHERE base = ? AND symbol = ? AND data_mode = 'demo') THEN 'demo' END), data_mode)
             ORDER BY date
             """,
-            [base, symbol],
+            [base, symbol, base, symbol, base, symbol],
         )
         if rows:
             snapshots.append(_snapshot_from_series(symbol=symbol, asset_type="FX", exchange=base, rows=rows))
@@ -175,9 +177,10 @@ def _build_crypto_snapshots(db_path: str, symbols: list[str] | None) -> list[Ana
             SELECT date, symbol, 'CRYPTO' AS exchange, price_usd AS value, provider, data_mode, source_updated_at
             FROM crypto_prices_daily
             WHERE symbol = ? AND price_usd IS NOT NULL
+              AND data_mode = COALESCE((SELECT CASE WHEN EXISTS (SELECT 1 FROM crypto_prices_daily WHERE symbol = ? AND data_mode = 'live') THEN 'live' WHEN EXISTS (SELECT 1 FROM crypto_prices_daily WHERE symbol = ? AND data_mode = 'demo') THEN 'demo' END), data_mode)
             ORDER BY date
             """,
-            [symbol],
+            [symbol, symbol, symbol],
         )
         if rows:
             snapshots.append(_snapshot_from_series(symbol=symbol, asset_type="CRYPTO", exchange="CRYPTO", rows=rows))
@@ -196,9 +199,10 @@ def _build_macro_snapshots(db_path: str, symbols: list[str] | None) -> list[Anal
             SELECT date, indicator_code AS symbol, 'MACRO' AS exchange, value, source AS provider, data_mode, source_updated_at
             FROM macro_indicators_daily
             WHERE indicator_code = ? AND value IS NOT NULL
+              AND data_mode = COALESCE((SELECT CASE WHEN EXISTS (SELECT 1 FROM macro_indicators_daily WHERE indicator_code = ? AND data_mode = 'live') THEN 'live' WHEN EXISTS (SELECT 1 FROM macro_indicators_daily WHERE indicator_code = ? AND data_mode = 'demo') THEN 'demo' END), data_mode)
             ORDER BY date
             """,
-            [symbol],
+            [symbol, symbol, symbol],
         )
         if rows:
             snapshots.append(_snapshot_from_series(symbol=symbol, asset_type="MACRO", exchange="MACRO", rows=rows, macro=True))

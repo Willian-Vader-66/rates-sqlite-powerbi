@@ -56,14 +56,14 @@ After JavaFX opens, verify:
 - Stocks has equity cards, a populated stock table, and stock momentum charts.
 - FX & Crypto has FX/crypto cards, table, and USD/BRL, USD/EUR, BTC/USD, ETH/USD charts.
 - Macro has macro cards, indicator table, and macro chart/insufficient-history messaging.
-- Watchlist range selector visibly shows `1Y` by default and options `30D`, `90D`, `6M`, `1Y`, `4Y`.
+- Watchlist range selector visibly shows `1Y` by default and options `30D`, `90D`, `180D`, `1Y`, `365D`.
 - Watchlist and selected chart show explicit display units: `AAPL/USD`, `USD/BRL`, `BTC/USD`, and macro units such as `% a.a.`.
 - AAPL and other stock prices are plausible USD values, not values in the millions.
 - Settings shows API URL, DB path, DB size, historical rows, and date range.
 
 ## Parameters
 
-- `-PrepareDemo`: runs `.\.venv\Scripts\python.exe -m fx_rates dashboard prepare-demo --years 4 --demo`.
+- `-PrepareDemo`: runs `.\.venv\Scripts\python.exe -m fx_rates dashboard prepare-demo --years 1 --demo`.
 - `-SkipTests`: skips `pytest`, `mvn clean test`, and `mvn -q -DskipTests compile`.
 - `-Port`: backend port, default `8000`.
 - `-HostAddress`: backend host, default `127.0.0.1`.
@@ -94,7 +94,7 @@ Run:
 You can also prepare data manually:
 
 ```powershell
-.\.venv\Scripts\python.exe -m fx_rates dashboard prepare-demo --years 4 --demo
+.\.venv\Scripts\python.exe -m fx_rates dashboard prepare-demo --years 1 --demo
 ```
 
 Then validate:

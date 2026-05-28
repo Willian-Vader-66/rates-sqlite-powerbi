@@ -67,7 +67,7 @@ public class DashboardController {
     private static final String BACKEND_OFFLINE_MESSAGE =
             "Backend API unavailable. Start backend: python -m fx_rates serve --host 127.0.0.1 --port 8000";
     private static final String PREPARE_DASHBOARD_MESSAGE =
-            "No data loaded. Run: python -m fx_rates dashboard prepare-demo --years 4 --demo";
+            "No live data loaded. Run: python -m fx_rates dashboard build-live-db --days 365 --db-path .tmp/live-main-candidate.sqlite --external-test";
 
     private final AppConfig config;
     private final MarketDataService marketDataService;
@@ -144,7 +144,7 @@ public class DashboardController {
 
     private VBox buildHeader() {
         Label title = new Label("Finance Monitor");
-        Label subtitle = new Label("Local Market Intelligence Console");
+        Label subtitle = new Label("Live-first local market intelligence");
         title.getStyleClass().add("app-title");
         subtitle.getStyleClass().add("app-subtitle");
         VBox brand = new VBox(3, title, subtitle);
@@ -584,7 +584,7 @@ public class DashboardController {
 
     private void loadHistory(WatchRow row) {
         LocalDate end = LocalDate.now();
-        HistoryRange selectedRange = historyRange.getValue() == null ? HistoryRange.FOUR_Y : historyRange.getValue();
+        HistoryRange selectedRange = historyRange.getValue() == null ? HistoryRange.ONE_Y : historyRange.getValue();
         LocalDate start = selectedRange.startDate(end);
         chartController.setPeriodLabel(selectedRange.label());
         String historyKey = "%s|%s|%s|%s|%s".formatted(row.assetType(), row.symbol(), selectedRange.label(), start, end);
@@ -1091,26 +1091,42 @@ public class DashboardController {
                 FormatUtils.text(status.coverage().dateMax()),
                 FormatUtils.integer(status.coverage().historicalRows())
         );
-        settingsCoverage.setText(coverage);
+        settingsCoverage.setText("""
+                %s
+                Period: Last %s days
+                History mode: %s
+                Advanced history: %s
+                Advanced max: up to %s years with paid providers
+                """.formatted(
+                coverage,
+                FormatUtils.integer(status.requestedDays() == null ? 365 : status.requestedDays()),
+                FormatUtils.text(status.historyMode() == null ? "standard" : status.historyMode()).toUpperCase(),
+                Boolean.TRUE.equals(status.advancedHistoryEnabled()) ? "enabled" : "not enabled",
+                FormatUtils.integer(status.advancedHistoryMaxYears() == null ? 10 : status.advancedHistoryMaxYears())
+        ));
         String dataMode = effectiveDataMode(status, summary);
         String providers = status.providers() == null || status.providers().isEmpty() ? "-" : String.join(", ", status.providers());
         String providerSummary = formatProviderSummary(status.providerSummary());
         String modeCounts = formatDataModeCounts(status.dataModeCounts());
         settingsRuntime.setText("""
                 Data mode: %s
+                Data health: %s
                 Providers: %s
                 Provider details: %s
                 Mode counts: %s
                 Live provider status: %s
+                Live validation: %s
                 Data timestamp: %s
                 Warning: %s
-                Recommended prepare command: %s
+                Recommended live command: %s
                 """.formatted(
                 dataMode.toUpperCase(),
+                dataHealthStatus(status),
                 providers,
                 providerSummary,
                 modeCounts,
                 formatLiveProviderStatus(status.liveProviderStatus()),
+                liveValidationStatus(status),
                 FormatUtils.text(status.dataGeneratedAt()),
                 FormatUtils.text(status.dataWarning()),
                 FormatUtils.text(status.recommendedPrepareCommand())
@@ -1119,9 +1135,11 @@ public class DashboardController {
 
     private void updateDataModeBadge(SystemStatus status, DashboardSummary summary) {
         String mode = effectiveDataMode(status, summary);
-        dataModeBadge.setText(mode.toUpperCase() + " DATA");
+        String health = rawDataHealthStatus(status);
+        boolean liveHealthy = "live".equals(mode) && "OK".equalsIgnoreCase(health);
+        dataModeBadge.setText(liveHealthy ? "LIVE DATA - Last 365 days" : mode.toUpperCase() + " DATA - REVIEW");
         dataModeBadge.getStyleClass().removeAll("data-mode-demo", "data-mode-live", "data-mode-mixed", "data-mode-unknown");
-        dataModeBadge.getStyleClass().add("data-mode-" + mode);
+        dataModeBadge.getStyleClass().add(liveHealthy ? "data-mode-live" : "data-mode-mixed");
         Tooltip.install(dataModeBadge, new Tooltip(dataModeTooltip(status, summary, mode)));
     }
 
@@ -1173,6 +1191,41 @@ public class DashboardController {
                 ? String.join(", ", status.providers())
                 : "-";
         return "Mode: %s\nProviders: %s\n%s".formatted(mode.toUpperCase(), providers, FormatUtils.text(warning));
+    }
+
+    private String dataHealthStatus(SystemStatus status) {
+        if (status == null || status.dataHealth() == null) {
+            return "-";
+        }
+        String value = FormatUtils.text(rawDataHealthStatus(status));
+        String missing = status.dataHealth().missingImportantSymbols() == null || status.dataHealth().missingImportantSymbols().isEmpty()
+                ? ""
+                : " missing=" + String.join("/", status.dataHealth().missingImportantSymbols());
+        return value + missing;
+    }
+
+    private String rawDataHealthStatus(SystemStatus status) {
+        if (status == null || status.dataHealth() == null || status.dataHealth().status() == null || status.dataHealth().status().isBlank()) {
+            return "UNKNOWN";
+        }
+        return status.dataHealth().status().trim().toUpperCase();
+    }
+
+    private String liveValidationStatus(SystemStatus status) {
+        if (status == null) {
+            return "-";
+        }
+        String health = dataHealthStatus(status);
+        if ("live".equalsIgnoreCase(status.dataMode())) {
+            return "LIVE DB " + health + "; sample report: docs/LIVE_SAMPLE_VALIDATION_REPORT.md";
+        }
+        if ("demo".equalsIgnoreCase(status.dataMode())) {
+            return "DEMO DATA - build and promote a live DB for release use";
+        }
+        if ("mixed".equalsIgnoreCase(status.dataMode())) {
+            return "MIXED DATA - review audit-live before release use";
+        }
+        return health;
     }
 
     private String formatProviderSummary(List<SystemStatus.ProviderSummary> summary) {

@@ -124,7 +124,7 @@ function Wait-ForBackend($StatusUrl, $TimeoutSeconds) {
                 Write-Host ".\run_visual_test.ps1 -PrepareDemo"
                 Write-Host ""
                 Write-Host "Or:"
-                Write-Host ".\.venv\Scripts\python.exe -m fx_rates dashboard prepare-demo --years 4 --demo"
+                Write-Host ".\.venv\Scripts\python.exe -m fx_rates dashboard prepare-demo --days 365 --demo"
                 throw "Dashboard database is empty."
             }
             return $status
@@ -239,7 +239,7 @@ try {
     }
 
     if ($PrepareDemo) {
-        Invoke-CheckedCommand "Preparing demo dashboard data" $PythonPath @("-m", "fx_rates", "dashboard", "prepare-demo", "--years", "4", "--demo") $RepoRoot $null
+        Invoke-CheckedCommand "Preparing demo dashboard data" $PythonPath @("-m", "fx_rates", "dashboard", "prepare-demo", "--days", "365", "--demo") $RepoRoot $null
     }
 
     if (Test-PortInUse $Port) {

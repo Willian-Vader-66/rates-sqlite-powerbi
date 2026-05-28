@@ -39,8 +39,8 @@ def test_prepare_demo_dashboard_populates_sqlite_without_api_key(monkeypatch, tm
         [
             "dashboard",
             "prepare-demo",
-            "--years",
-            "1",
+            "--days",
+            "365",
             "--demo",
             "--db-path",
             str(db_path),
@@ -62,14 +62,14 @@ def test_prepare_demo_dashboard_populates_sqlite_without_api_key(monkeypatch, tm
     history_end = date.fromisoformat(status["date_max"])
     history_30d = (history_end - timedelta(days=30)).isoformat()
     history_1y = history_end.replace(year=history_end.year - 1).isoformat()
-    history_4y = history_end.replace(year=history_end.year - 4).isoformat()
+    history_365d = (history_end - timedelta(days=365)).isoformat()
     stock_30d = client.get(f"/api/stocks/history?symbol=AAPL&start={history_30d}&end={history_end}").json()
     stock_1y = client.get(f"/api/stocks/history?symbol=AAPL&start={history_1y}&end={history_end}").json()
-    stock_4y = client.get(f"/api/stocks/history?symbol=AAPL&start={history_4y}&end={history_end}").json()
+    stock_365d = client.get(f"/api/stocks/history?symbol=AAPL&start={history_365d}&end={history_end}").json()
     fx_history = client.get(f"/api/fx/history?base=USD&symbol=BRL&start={history_30d}&end={history_end}").json()
     crypto_history = client.get(f"/api/crypto/history?symbol=BTC&start={history_30d}&end={history_end}").json()
     macro_history = client.get(f"/api/macro/history?indicator_code=SELIC_DAILY&start={history_30d}&end={history_end}").json()
-    unknown_history = client.get(f"/api/stocks/history?symbol=NOPE&start={history_4y}&end={history_end}").json()
+    unknown_history = client.get(f"/api/stocks/history?symbol=NOPE&start={history_365d}&end={history_end}").json()
     aapl_quote = client.get("/api/quotes/latest?symbols=AAPL&asset_type=STOCK").json()
     latest_analysis = client.get("/api/analysis/latest").json()
 
@@ -110,7 +110,7 @@ def test_prepare_demo_dashboard_populates_sqlite_without_api_key(monkeypatch, tm
     assert len(overview["cards"]) >= 4
     assert stock_30d["count"] > 0
     assert stock_1y["count"] > 0
-    assert stock_4y["count"] > 0
+    assert stock_365d["count"] > 0
     assert fx_history["count"] > 0
     assert crypto_history["count"] > 0
     assert macro_history["count"] > 0
@@ -140,8 +140,8 @@ def test_dashboard_audit_reports_coverage(monkeypatch, tmp_path: Path) -> None:
         [
             "dashboard",
             "prepare-demo",
-            "--years",
-            "1",
+            "--days",
+            "365",
             "--demo",
             "--db-path",
             str(db_path),
@@ -179,8 +179,8 @@ def test_prepare_demo_stock_latest_quotes_match_latest_history(monkeypatch, tmp_
         [
             "dashboard",
             "prepare-demo",
-            "--years",
-            "4",
+            "--days",
+            "365",
             "--demo",
             "--db-path",
             str(db_path),
@@ -240,15 +240,15 @@ def test_prepare_demo_stock_latest_quotes_match_latest_history(monkeypatch, tmp_
     assert summary["latest_quote_count"] == 68
     assert summary["latest_analysis_count"] == 68
     assert aapl is not None
-    assert aapl["historical_rows"] > 1000
+    assert aapl["historical_rows"] >= 250
     assert 50 < aapl["price"] < 1000
     assert aapl["price"] == aapl["close"]
     assert aapl["bid"] < aapl["price"] < aapl["ask"]
     assert not inflated_stock_quotes
     assert not mismatched_quotes
 
-    audit = audit_dashboard(str(db_path), expected_years=4)
+    audit = audit_dashboard(str(db_path), expected_years=1)
     aapl_consistency = next(item for item in audit["quote_consistency"] if item["label"] == "AAPL")
-    assert aapl_consistency["historical_rows"] > 1000
+    assert aapl_consistency["historical_rows"] >= 250
     assert aapl_consistency["status"] == "OK"
     assert aapl_consistency["ratio"] == 1.0

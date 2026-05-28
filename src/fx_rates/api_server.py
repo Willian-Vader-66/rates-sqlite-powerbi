@@ -269,11 +269,12 @@ def _history_response(
     metadata = _metadata_from_rows(rows, symbol=normalized_symbol, asset_type=asset_type, base=base)
     actual_start = rows[0]["date"] if rows else None
     actual_end = rows[-1]["date"] if rows else None
+    latest_row = rows[-1] if rows else {}
     label = metadata.get("display_pair") or normalized_symbol
     requested = _requested_period(start, end)
     message = None
     if not rows:
-        message = f"No {label} history available for {requested}. Run: python -m fx_rates dashboard prepare-demo --years 4 --demo"
+        message = f"No {label} history available for {requested}. Run: python -m fx_rates dashboard build-live-db --days 365 --db-path .tmp/live-main-candidate.sqlite --external-test"
     payload = {
         "symbol": normalized_symbol,
         "asset_type": asset_type,
@@ -286,6 +287,10 @@ def _history_response(
         "requested_end": end,
         "period": requested,
         "items": rows,
+        "provider": latest_row.get("provider") or latest_row.get("source"),
+        "data_mode": latest_row.get("data_mode"),
+        "source_updated_at": latest_row.get("source_updated_at"),
+        "data_modes": sorted({str(row.get("data_mode") or "unknown") for row in rows}) if rows else [],
         "message": message,
     }
     payload.update(metadata)

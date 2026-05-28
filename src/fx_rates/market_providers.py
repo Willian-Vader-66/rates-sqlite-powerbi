@@ -11,6 +11,7 @@ from typing import Any, Callable, Protocol
 import requests
 
 from .models import MarketQuoteRow, StockPriceDailyRow
+from .redaction import redact_params, redact_text, truncate_text
 from .utils import parse_yyyy_mm_dd, utc_now_iso
 
 logger = logging.getLogger(__name__)
@@ -110,7 +111,7 @@ class TwelveDataProvider:
                     fetched_at=fetched_at,
                 )
             )
-        return rows
+        return sorted(rows, key=lambda row: row.date)
 
     def fetch_quote(self, symbol: str, asset_type: str = "STOCK", exchange: str | None = None) -> MarketQuoteRow:
         payload = self._request_json("quote", {"symbol": symbol.strip().upper(), "apikey": self.api_key})
@@ -142,15 +143,15 @@ class TwelveDataProvider:
 
     def _request_json(self, endpoint: str, params: dict[str, str]) -> dict[str, Any]:
         url = f"{self.base_url}/{endpoint}"
-        redacted = {key: ("***" if key == "apikey" else value) for key, value in params.items()}
+        redacted = redact_params(params)
         for attempt in range(self.max_retries + 1):
             self.rate_limiter.wait()
             self.request_logger.info("provider_call provider=%s endpoint=%s params=%s", self.name, endpoint, redacted)
             try:
                 response = self.session.get(url, params=params, timeout=self.timeout_seconds)
-            except requests.RequestException:
+            except requests.RequestException as exc:
                 if attempt >= self.max_retries:
-                    raise
+                    raise RuntimeError(redact_text(exc)) from exc
                 time.sleep(0.5 * (2**attempt))
                 continue
 
@@ -159,7 +160,9 @@ class TwelveDataProvider:
                     retry_after = _to_float(response.headers.get("Retry-After")) or (0.5 * (2**attempt))
                     time.sleep(retry_after)
                     continue
-            response.raise_for_status()
+            if response.status_code >= 400:
+                body = truncate_text(getattr(response, "text", ""), limit=500)
+                raise RuntimeError(f"twelvedata HTTP {response.status_code} endpoint={endpoint} body={body}")
             return response.json()
         raise RuntimeError(f"falha inesperada em provider endpoint={endpoint}")
 

@@ -6,7 +6,7 @@
 cd C:\Projetos_Local\rates-sqlite-powerbi
 .\.venv\Scripts\python.exe -m pytest -q
 $env:MARKET_DATA_DEMO_MODE='true'
-.\.venv\Scripts\python.exe -m fx_rates dashboard prepare-demo --years 4 --demo
+.\.venv\Scripts\python.exe -m fx_rates dashboard prepare-demo --years 1 --demo
 .\.venv\Scripts\python.exe -m fx_rates dashboard audit
 .\.venv\Scripts\python.exe -m fx_rates serve --host 127.0.0.1 --port 8000
 ```
@@ -19,7 +19,7 @@ PowerShell:
 cd C:\Projetos_Local\rates-sqlite-powerbi
 .\.venv\Scripts\Activate.ps1
 $env:MARKET_DATA_DEMO_MODE='true'
-python -m fx_rates dashboard prepare-demo --years 4 --demo
+python -m fx_rates dashboard prepare-demo --years 1 --demo
 python -m fx_rates serve --host 127.0.0.1 --port 8000
 ```
 
@@ -54,7 +54,7 @@ PowerShell:
 ```powershell
 cd C:\Projetos_Local\rates-sqlite-powerbi
 .\.venv\Scripts\Activate.ps1
-python -m fx_rates dashboard prepare-demo --years 4 --demo
+python -m fx_rates dashboard prepare-demo --years 1 --demo
 python -m fx_rates dashboard audit
 python -m fx_rates serve --host 127.0.0.1 --port 8000
 ```
@@ -122,14 +122,14 @@ mvn javafx:run
 - FX & Crypto tab shows FX/crypto cards, table, and key 30-day charts
 - Macro tab shows macro cards, indicator table, and macro chart/insufficient-history state
 - fixed chart cards render or show clear empty states
-- empty chart cards show `No data loaded. Run: python -m fx_rates dashboard prepare-demo --years 4 --demo`
+- empty chart cards show `No data loaded. Run: python -m fx_rates dashboard prepare-demo --years 1 --demo`
 - top stocks panel renders or shows a clear empty state
 - Watchlist tab still loads instruments, quotes, analysis, and filters
 - selecting a stock loads the historical chart
 - selecting crypto loads crypto history when present
 - selecting macro loads macro history when present
-- selected instrument chart offers 30D, 90D, 6M, 1Y, and 4Y, with 1Y visible by default
-- 4Y selected history shows coverage around 2022-05 to 2026-05
+- selected instrument chart offers 30D, 90D, 180D, 1Y, and 365D, with 1Y visible by default
+- 365D selected history shows coverage around 2022-05 to 2026-05
 - selecting the same instrument repeatedly does not spam duplicate history calls
 - most rows show useful trend/signal rather than raw UNKNOWN
 - Watchlist shows display pair/unit, for example AAPL/USD, USD/BRL, BTC/USD, and macro `% a.a.`/`% a.m.`/`% a.d.`

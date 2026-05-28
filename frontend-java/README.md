@@ -128,12 +128,12 @@ CORS is not relevant for this JavaFX desktop app because it uses Java's built-in
 
 ### Empty dashboard
 
-The backend may be running with an empty SQLite database or a different DB path. Seed data in demo mode and compare `/api/system/status` with `dashboard audit`:
+The backend may be running with an empty SQLite database or a different DB path. Build and promote a live candidate, then compare `/api/system/status` with `dashboard audit-live`:
 
 ```powershell
-$env:MARKET_DATA_DEMO_MODE='true'
-python -m fx_rates dashboard prepare-demo --years 4 --demo
-python -m fx_rates dashboard audit
+python -m fx_rates dashboard build-live-db --days 365 --db-path .tmp/live-main-candidate.sqlite --external-test --allow-partial
+python -m fx_rates dashboard audit-live --db-path .tmp/live-main-candidate.sqlite
+python -m fx_rates dashboard promote-live --from-db .tmp/live-main-candidate.sqlite --to-db data/fx.sqlite --backup
 Invoke-RestMethod http://127.0.0.1:8000/api/system/status
 Invoke-RestMethod http://127.0.0.1:8000/api/dashboard/summary
 ```

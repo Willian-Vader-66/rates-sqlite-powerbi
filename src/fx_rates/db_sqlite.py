@@ -91,12 +91,16 @@ CREATE TABLE IF NOT EXISTS instruments (
     instrument_id INTEGER PRIMARY KEY AUTOINCREMENT,
     symbol TEXT NOT NULL,
     name TEXT,
+    display_name TEXT,
     asset_type TEXT NOT NULL,
     exchange TEXT,
     currency TEXT,
     sector TEXT,
     provider TEXT,
     provider_symbol TEXT,
+    unit_label TEXT,
+    value_label TEXT,
+    expected_frequency TEXT,
     data_mode TEXT NOT NULL DEFAULT 'unknown',
     is_active INTEGER DEFAULT 1,
     priority INTEGER DEFAULT 100,
@@ -217,19 +221,23 @@ ON CONFLICT(date, base, symbol) DO UPDATE SET
 
 UPSERT_INSTRUMENT_SQL = """
 INSERT INTO instruments (
-    symbol, name, asset_type, exchange, currency, sector, provider, provider_symbol,
-    data_mode, is_active, priority, created_at, updated_at
+    symbol, name, display_name, asset_type, exchange, currency, sector, provider, provider_symbol,
+    unit_label, value_label, expected_frequency, data_mode, is_active, priority, created_at, updated_at
 )
 VALUES (
-    :symbol, :name, :asset_type, :exchange, :currency, :sector, :provider, :provider_symbol,
-    :data_mode, :is_active, :priority, :created_at, :updated_at
+    :symbol, :name, :display_name, :asset_type, :exchange, :currency, :sector, :provider, :provider_symbol,
+    :unit_label, :value_label, :expected_frequency, :data_mode, :is_active, :priority, :created_at, :updated_at
 )
 ON CONFLICT(asset_type, symbol, exchange) DO UPDATE SET
     name = excluded.name,
+    display_name = excluded.display_name,
     currency = excluded.currency,
     sector = excluded.sector,
     provider = excluded.provider,
     provider_symbol = excluded.provider_symbol,
+    unit_label = excluded.unit_label,
+    value_label = excluded.value_label,
+    expected_frequency = excluded.expected_frequency,
     data_mode = excluded.data_mode,
     is_active = excluded.is_active,
     priority = excluded.priority,
@@ -349,8 +357,8 @@ EXPECTED_INGEST_COLS = {
     "error",
 }
 
-DASHBOARD_EMPTY_MESSAGE = "No data loaded. Run: python -m fx_rates dashboard prepare-demo --years 4 --demo"
-PREPARE_COMMAND = "python -m fx_rates dashboard prepare-demo --years 4 --demo"
+DASHBOARD_EMPTY_MESSAGE = "No live data loaded. Run: python -m fx_rates dashboard build-live-db --days 365 --db-path .tmp/live-main-candidate.sqlite --external-test"
+PREPARE_COMMAND = "python -m fx_rates dashboard build-live-db --days 365 --db-path .tmp/live-main-candidate.sqlite --external-test"
 
 
 def initialize_schema(db_path: str) -> None:
@@ -379,7 +387,13 @@ def _ensure_analysis_columns(conn: sqlite3.Connection) -> None:
 def _ensure_data_origin_columns(conn: sqlite3.Connection) -> None:
     columns = {
         "fx_rates": {"data_mode": "TEXT NOT NULL DEFAULT 'unknown'", "source_updated_at": "TEXT"},
-        "instruments": {"data_mode": "TEXT NOT NULL DEFAULT 'unknown'"},
+        "instruments": {
+            "display_name": "TEXT",
+            "unit_label": "TEXT",
+            "value_label": "TEXT",
+            "expected_frequency": "TEXT",
+            "data_mode": "TEXT NOT NULL DEFAULT 'unknown'",
+        },
         "stock_prices_daily": {"data_mode": "TEXT NOT NULL DEFAULT 'unknown'", "source_updated_at": "TEXT"},
         "market_quotes_latest": {"data_mode": "TEXT NOT NULL DEFAULT 'unknown'", "source_updated_at": "TEXT"},
         "analysis_snapshots": {"data_mode": "TEXT NOT NULL DEFAULT 'unknown'", "source_updated_at": "TEXT"},
@@ -505,13 +519,15 @@ def list_instruments(
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             f"""
-            SELECT instrument_id, symbol, name, asset_type, exchange, currency, sector,
-                   provider, provider_symbol, data_mode, is_active, priority, created_at, updated_at
+            SELECT instrument_id, symbol, name, display_name, asset_type, exchange, currency, sector,
+                   provider, provider_symbol, unit_label, value_label, expected_frequency,
+                   data_mode, is_active, priority, created_at, updated_at
             FROM (
                 SELECT *,
                        ROW_NUMBER() OVER (
                            PARTITION BY asset_type, symbol
-                           ORDER BY is_active DESC, priority ASC, instrument_id DESC
+                           ORDER BY CASE data_mode WHEN 'live' THEN 0 WHEN 'demo' THEN 1 ELSE 2 END,
+                                    is_active DESC, priority ASC, instrument_id DESC
                        ) AS rn
                 FROM instruments
                 {where}
@@ -541,10 +557,12 @@ def _with_display_metadata(db_path: str, rows: list[dict[str, Any]]) -> list[dic
             conn.row_factory = sqlite3.Row
             for row in conn.execute(
                 f"""
-                SELECT asset_type, symbol, name, exchange, currency, sector, provider, provider_symbol, data_mode
+                SELECT asset_type, symbol, name, display_name, exchange, currency, sector, provider, provider_symbol,
+                       unit_label, value_label, expected_frequency, data_mode
                 FROM instruments
                 WHERE symbol IN ({placeholders})
-                ORDER BY is_active DESC, priority ASC
+                ORDER BY CASE data_mode WHEN 'live' THEN 0 WHEN 'demo' THEN 1 ELSE 2 END,
+                         is_active DESC, priority ASC
                 """,
                 sorted(symbols),
             ).fetchall():
@@ -575,9 +593,17 @@ def _with_display_metadata(db_path: str, rows: list[dict[str, Any]]) -> list[dic
         item.setdefault("sector", meta.get("sector"))
         item.setdefault("provider", meta.get("provider"))
         item.setdefault("provider_symbol", meta.get("provider_symbol"))
+        if not item.get("display_name"):
+            item["display_name"] = meta.get("display_name") or meta.get("name")
+        if not item.get("unit_label"):
+            item["unit_label"] = meta.get("unit_label")
+        if not item.get("value_label"):
+            item["value_label"] = meta.get("value_label")
+        if not item.get("expected_frequency"):
+            item["expected_frequency"] = meta.get("expected_frequency")
         item["data_mode"] = canonical_record_mode(item.get("data_mode"), item.get("provider"), meta.get("data_mode"))
         if asset_type == "MACRO":
-            item.setdefault("unit", macro_units.get(symbol))
+            item.setdefault("unit", macro_units.get(symbol) or item.get("unit_label"))
         item = _apply_origin_metadata(item)
         enriched.append(apply_display_metadata(item))
     return enriched
@@ -752,7 +778,7 @@ def commit_prepared_live_dataset(
     with sqlite3.connect(db_path) as conn:
         try:
             conn.execute("BEGIN")
-            if replace_demo:
+            if replace_demo or normalized_symbols:
                 _delete_mode_rows(conn, "instruments", "data_mode = ?", ["demo"], asset_col="asset_type", symbol_col="symbol", asset_types=set(asset_types), symbols=set(normalized_symbols))
                 _delete_mode_rows(conn, "market_quotes_latest", "data_mode = ?", ["demo"], asset_col="asset_type", symbol_col="symbol", asset_types=set(asset_types), symbols=set(normalized_symbols))
                 _delete_mode_rows(conn, "analysis_snapshots", "data_mode = ?", ["demo"], asset_col="asset_type", symbol_col="symbol", asset_types=set(asset_types), symbols=set(normalized_symbols))
@@ -906,7 +932,7 @@ def get_data_health(db_path: str) -> dict[str, Any]:
         "live_count": int(counts.get("live", 0)),
         "mixed_count": int(counts.get("mixed", 0)),
         "unknown_count": int(counts.get("unknown", 0)),
-        "repair_command": "python -m fx_rates dashboard prepare-demo --years 4 --demo --symbols AAPL,MSFT,NVDA",
+        "repair_command": PREPARE_COMMAND,
     }
 
 
@@ -1086,13 +1112,18 @@ def get_system_status(db_path: str) -> dict[str, Any]:
             "date_min": None,
             "date_max": None,
             "is_empty": True,
-            "message": "No data loaded. Run prepare-demo.",
+            "message": DASHBOARD_EMPTY_MESSAGE,
             "recommended_prepare_command": PREPARE_COMMAND,
             "data_mode": "unknown",
             "providers": [],
             "provider_summary": [],
             "data_mode_counts": {"demo": 0, "live": 0, "mixed": 0, "unknown": 0},
             "coverage": {},
+            "requested_days": 365,
+            "history_mode": "standard",
+            "advanced_history_available": False,
+            "advanced_history_enabled": False,
+            "advanced_history_max_years": 10,
             "data_health": get_data_health(str(path)),
             "data_generated_at": None,
             "data_warning": "database not found",
@@ -1140,27 +1171,36 @@ def get_system_status(db_path: str) -> dict[str, Any]:
         "provider_summary": data_mode["provider_summary"],
         "data_mode_counts": data_mode["data_mode_counts"],
         "coverage": data_mode["coverage"],
+        "requested_days": 365,
+        "history_mode": "standard",
+        "advanced_history_available": False,
+        "advanced_history_enabled": False,
+        "advanced_history_max_years": 10,
         "data_health": get_data_health(str(path)),
         "data_generated_at": data_mode["generated_at"],
         "data_warning": data_mode["warning"],
     }
     if is_empty:
-        status["message"] = "No data loaded. Run prepare-demo."
+        status["message"] = DASHBOARD_EMPTY_MESSAGE
     return status
 
 
 def get_stock_history(db_path: str, symbol: str, start: str | None = None, end: str | None = None) -> list[dict[str, Any]]:
+    normalized_symbol = symbol.strip().upper()
     clauses = ["symbol = ?"]
-    params: list[Any] = [symbol.strip().upper()]
-    if start:
-        clauses.append("date >= ?")
-        params.append(start)
-    if end:
-        clauses.append("date <= ?")
-        params.append(end)
-
+    params: list[Any] = [normalized_symbol]
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
+        preferred_mode = _preferred_data_mode(conn, "stock_prices_daily", "symbol", normalized_symbol)
+        if preferred_mode:
+            clauses.append("data_mode = ?")
+            params.append(preferred_mode)
+        if start:
+            clauses.append("date >= ?")
+            params.append(start)
+        if end:
+            clauses.append("date <= ?")
+            params.append(end)
         rows = conn.execute(
             f"""
             SELECT date, symbol, exchange, open, high, low, close, adjusted_close,
@@ -1181,17 +1221,23 @@ def get_fx_history(
     start: str | None = None,
     end: str | None = None,
 ) -> list[dict[str, Any]]:
+    normalized_base = base.strip().upper()
+    normalized_symbol = symbol.strip().upper()
     clauses = ["base = ?", "symbol = ?"]
-    params: list[Any] = [base.strip().upper(), symbol.strip().upper()]
-    if start:
-        clauses.append("date >= ?")
-        params.append(start)
-    if end:
-        clauses.append("date <= ?")
-        params.append(end)
+    params: list[Any] = [normalized_base, normalized_symbol]
 
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
+        preferred_mode = _preferred_data_mode(conn, "fx_rates", "symbol", normalized_symbol, extra_clause="base=?", extra_params=[normalized_base])
+        if preferred_mode:
+            clauses.append("data_mode = ?")
+            params.append(preferred_mode)
+        if start:
+            clauses.append("date >= ?")
+            params.append(start)
+        if end:
+            clauses.append("date <= ?")
+            params.append(end)
         rows = conn.execute(
             f"""
             SELECT date, base, symbol, rate, source, fetched_at, data_mode, source_updated_at
@@ -1210,17 +1256,22 @@ def get_macro_history(
     start: str | None = None,
     end: str | None = None,
 ) -> list[dict[str, Any]]:
+    normalized_symbol = indicator_code.strip().upper()
     clauses = ["indicator_code = ?"]
-    params: list[Any] = [indicator_code.strip().upper()]
-    if start:
-        clauses.append("date >= ?")
-        params.append(start)
-    if end:
-        clauses.append("date <= ?")
-        params.append(end)
+    params: list[Any] = [normalized_symbol]
 
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
+        preferred_mode = _preferred_data_mode(conn, "macro_indicators_daily", "indicator_code", normalized_symbol)
+        if preferred_mode:
+            clauses.append("data_mode = ?")
+            params.append(preferred_mode)
+        if start:
+            clauses.append("date >= ?")
+            params.append(start)
+        if end:
+            clauses.append("date <= ?")
+            params.append(end)
         rows = conn.execute(
             f"""
             SELECT date, indicator_code, indicator_name, value, unit, source, fetched_at, data_mode, source_updated_at
@@ -1239,17 +1290,22 @@ def get_crypto_history(
     start: str | None = None,
     end: str | None = None,
 ) -> list[dict[str, Any]]:
+    normalized_symbol = symbol.strip().upper()
     clauses = ["symbol = ?"]
-    params: list[Any] = [symbol.strip().upper()]
-    if start:
-        clauses.append("date >= ?")
-        params.append(start)
-    if end:
-        clauses.append("date <= ?")
-        params.append(end)
+    params: list[Any] = [normalized_symbol]
 
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
+        preferred_mode = _preferred_data_mode(conn, "crypto_prices_daily", "symbol", normalized_symbol)
+        if preferred_mode:
+            clauses.append("data_mode = ?")
+            params.append(preferred_mode)
+        if start:
+            clauses.append("date >= ?")
+            params.append(start)
+        if end:
+            clauses.append("date <= ?")
+            params.append(end)
         rows = conn.execute(
             f"""
             SELECT date, symbol, name, price_usd, market_cap, volume_24h, change_24h, provider, fetched_at, data_mode, source_updated_at
@@ -1260,6 +1316,35 @@ def get_crypto_history(
             params,
         ).fetchall()
     return _with_display_metadata(db_path, [dict(row) for row in rows])
+
+
+def _preferred_data_mode(
+    conn: sqlite3.Connection,
+    table: str,
+    symbol_column: str,
+    symbol: str,
+    *,
+    extra_clause: str | None = None,
+    extra_params: list[Any] | None = None,
+) -> str | None:
+    clauses = [f"{symbol_column} = ?"]
+    params: list[Any] = [symbol.strip().upper()]
+    if extra_clause:
+        clauses.append(extra_clause)
+        params.extend(extra_params or [])
+    try:
+        rows = conn.execute(
+            f"SELECT DISTINCT COALESCE(data_mode, 'unknown') FROM {table} WHERE {' AND '.join(clauses)}",
+            params,
+        ).fetchall()
+    except sqlite3.Error:
+        return None
+    modes = {str(row[0] or "unknown").strip().lower() for row in rows}
+    if "live" in modes:
+        return "live"
+    if "demo" in modes:
+        return "demo"
+    return None
 
 
 def get_latest_quotes(
@@ -1289,7 +1374,7 @@ def get_latest_quotes(
                 SELECT *,
                        ROW_NUMBER() OVER (
                            PARTITION BY symbol, asset_type
-                           ORDER BY fetched_at DESC, quote_time DESC
+                           ORDER BY CASE data_mode WHEN 'live' THEN 0 WHEN 'demo' THEN 1 ELSE 2 END, fetched_at DESC, quote_time DESC
                        ) AS rn
                 FROM market_quotes_latest
                 {where}
@@ -1332,7 +1417,8 @@ def get_latest_analysis(
                 SELECT *,
                        ROW_NUMBER() OVER (
                            PARTITION BY symbol, asset_type
-                           ORDER BY generated_at DESC, snapshot_id DESC
+                           ORDER BY CASE data_mode WHEN 'live' THEN 0 WHEN 'demo' THEN 1 ELSE 2 END,
+                                    generated_at DESC, snapshot_id DESC
                        ) AS rn
                 FROM analysis_snapshots
             ) AS a
@@ -1482,7 +1568,7 @@ def get_fixed_dashboard_charts(db_path: str, days: int = 30, period: str | None 
                 "end_date": _points_end(usd_brl_points),
                 "point_count": len(usd_brl_points),
                 "points": usd_brl_points,
-                "message": None if usd_brl_points else f"No USD/BRL history available for {period_label}. Run dashboard prepare-demo.",
+                "message": None if usd_brl_points else f"No USD/BRL history available for {period_label}. Run dashboard build-live-db.",
             },
             {
                 "id": "usd_eur_30d",
@@ -1495,7 +1581,7 @@ def get_fixed_dashboard_charts(db_path: str, days: int = 30, period: str | None 
                 "end_date": _points_end(usd_eur_points),
                 "point_count": len(usd_eur_points),
                 "points": usd_eur_points,
-                "message": None if usd_eur_points else f"No USD/EUR history available for {period_label}. Run dashboard prepare-demo.",
+                "message": None if usd_eur_points else f"No USD/EUR history available for {period_label}. Run dashboard build-live-db.",
             },
         ],
         "crypto": [
@@ -1509,7 +1595,7 @@ def get_fixed_dashboard_charts(db_path: str, days: int = 30, period: str | None 
                 "end_date": _points_end(btc_points),
                 "point_count": len(btc_points),
                 "points": btc_points,
-                "message": None if btc_points else f"No BTC/USD history available for {period_label}. Run dashboard prepare-demo.",
+                "message": None if btc_points else f"No BTC/USD history available for {period_label}. Run dashboard build-live-db.",
             },
             {
                 "id": "eth_usd_30d",
@@ -1521,7 +1607,7 @@ def get_fixed_dashboard_charts(db_path: str, days: int = 30, period: str | None 
                 "end_date": _points_end(eth_points),
                 "point_count": len(eth_points),
                 "points": eth_points,
-                "message": None if eth_points else f"No ETH/USD history available for {period_label}. Run dashboard prepare-demo.",
+                "message": None if eth_points else f"No ETH/USD history available for {period_label}. Run dashboard build-live-db.",
             },
         ],
         "macro": [
@@ -1535,7 +1621,7 @@ def get_fixed_dashboard_charts(db_path: str, days: int = 30, period: str | None 
                 "end_date": _points_end(selic_points),
                 "point_count": len(selic_points),
                 "points": selic_points,
-                "message": None if selic_points else f"No Selic history available for {period_label}. Run dashboard prepare-demo.",
+                "message": None if selic_points else f"No Selic history available for {period_label}. Run dashboard build-live-db.",
             }
         ],
     }
@@ -1689,27 +1775,35 @@ def _chart_metadata(
 def period_to_days(period: str | None, default: int = 90) -> tuple[str, int]:
     normalized = (period or f"{default}D").strip().upper()
     mapping = {
+        "7D": 7,
         "30D": 30,
         "90D": 90,
-        "6M": 183,
+        "180D": 180,
         "1Y": 365,
-        "4Y": 1460,
+        "365D": 365,
     }
     return (normalized if normalized in mapping else f"{default}D", mapping.get(normalized, default))
 
 
 def _latest_stock_points(db_path: str, symbol: str, limit: int) -> list[dict[str, Any]]:
+    normalized_symbol = symbol.strip().upper()
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
+        preferred_mode = _preferred_data_mode(conn, "stock_prices_daily", "symbol", normalized_symbol)
+        mode_clause = " AND data_mode = ?" if preferred_mode else ""
+        params: list[Any] = [normalized_symbol]
+        if preferred_mode:
+            params.append(preferred_mode)
+        params.append(limit)
         rows = conn.execute(
-            """
+            f"""
             SELECT date, close AS value, provider, data_mode, source_updated_at
             FROM stock_prices_daily
-            WHERE symbol = ? AND close IS NOT NULL
+            WHERE symbol = ? AND close IS NOT NULL{mode_clause}
             ORDER BY date DESC
             LIMIT ?
             """,
-            (symbol.strip().upper(), limit),
+            params,
         ).fetchall()
     return [_apply_origin_metadata(dict(row)) for row in reversed(rows)]
 
@@ -1727,49 +1821,71 @@ def _points_for_instrument(db_path: str, instrument: dict[str, Any], limit: int)
 
 
 def _fx_points(db_path: str, base: str, symbol: str, limit: int) -> list[dict[str, Any]]:
+    normalized_base = base.strip().upper()
+    normalized_symbol = symbol.strip().upper()
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
+        preferred_mode = _preferred_data_mode(conn, "fx_rates", "symbol", normalized_symbol, extra_clause="base=?", extra_params=[normalized_base])
+        mode_clause = " AND data_mode = ?" if preferred_mode else ""
+        params: list[Any] = [normalized_base, normalized_symbol]
+        if preferred_mode:
+            params.append(preferred_mode)
+        params.append(limit)
         rows = conn.execute(
-            """
+            f"""
             SELECT date, rate AS value, source, data_mode, source_updated_at
             FROM fx_rates
-            WHERE base = ? AND symbol = ?
+            WHERE base = ? AND symbol = ?{mode_clause}
             ORDER BY date DESC
             LIMIT ?
             """,
-            (base, symbol, limit),
+            params,
         ).fetchall()
     return [_apply_origin_metadata(dict(row)) for row in reversed(rows)]
 
 
 def _crypto_points(db_path: str, symbol: str, limit: int) -> list[dict[str, Any]]:
+    normalized_symbol = symbol.strip().upper()
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
+        preferred_mode = _preferred_data_mode(conn, "crypto_prices_daily", "symbol", normalized_symbol)
+        mode_clause = " AND data_mode = ?" if preferred_mode else ""
+        params: list[Any] = [normalized_symbol]
+        if preferred_mode:
+            params.append(preferred_mode)
+        params.append(limit)
         rows = conn.execute(
-            """
+            f"""
             SELECT date, price_usd AS value, provider, data_mode, source_updated_at
             FROM crypto_prices_daily
-            WHERE symbol = ? AND price_usd IS NOT NULL
+            WHERE symbol = ? AND price_usd IS NOT NULL{mode_clause}
             ORDER BY date DESC
             LIMIT ?
             """,
-            (symbol.strip().upper(), limit),
+            params,
         ).fetchall()
     return [_apply_origin_metadata(dict(row)) for row in reversed(rows)]
 
 
 def _macro_points(db_path: str, indicator_code: str, limit: int) -> list[dict[str, Any]]:
+    normalized_symbol = indicator_code.strip().upper()
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
+        preferred_mode = _preferred_data_mode(conn, "macro_indicators_daily", "indicator_code", normalized_symbol)
+        mode_clause = " AND data_mode = ?" if preferred_mode else ""
+        params: list[Any] = [normalized_symbol]
+        if preferred_mode:
+            params.append(preferred_mode)
+        params.append(limit)
         rows = conn.execute(
-            """
+            f"""
             SELECT date, value, source, data_mode, source_updated_at
             FROM macro_indicators_daily
-            WHERE indicator_code = ? AND value IS NOT NULL
+            WHERE indicator_code = ? AND value IS NOT NULL{mode_clause}
             ORDER BY date DESC
             LIMIT ?
             """,
-            (indicator_code.strip().upper(), limit),
+            params,
         ).fetchall()
     return [_apply_origin_metadata(dict(row)) for row in reversed(rows)]
 
@@ -1779,10 +1895,12 @@ def _instrument_meta(db_path: str, symbol: str, asset_type: str) -> dict[str, An
         conn.row_factory = sqlite3.Row
         row = conn.execute(
             """
-            SELECT symbol, name, asset_type, exchange, currency, sector, provider, provider_symbol, data_mode
+            SELECT symbol, name, display_name, asset_type, exchange, currency, sector, provider, provider_symbol,
+                   unit_label, value_label, expected_frequency, data_mode
             FROM instruments
             WHERE symbol = ? AND asset_type = ?
-            ORDER BY priority
+            ORDER BY CASE data_mode WHEN 'live' THEN 0 WHEN 'demo' THEN 1 ELSE 2 END,
+                     priority
             LIMIT 1
             """,
             (symbol.strip().upper(), asset_type.strip().upper()),
@@ -1791,19 +1909,26 @@ def _instrument_meta(db_path: str, symbol: str, asset_type: str) -> dict[str, An
 
 
 def _latest_analysis_for_symbol(db_path: str, symbol: str, asset_type: str) -> dict[str, Any]:
+    normalized_symbol = symbol.strip().upper()
+    normalized_type = asset_type.strip().upper()
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
+        preferred_mode = _preferred_data_mode(conn, "analysis_snapshots", "symbol", normalized_symbol, extra_clause="asset_type=?", extra_params=[normalized_type])
+        mode_clause = " AND data_mode = ?" if preferred_mode else ""
+        params: list[Any] = [normalized_symbol, normalized_type]
+        if preferred_mode:
+            params.append(preferred_mode)
         row = conn.execute(
-            """
+            f"""
             SELECT symbol, asset_type, trend, signal, generated_at,
                    last_price, last_close, change_30d, change_90d, change_1y,
                    sma_20, sma_50, volatility_20, data_mode, source_updated_at
             FROM analysis_snapshots
-            WHERE symbol = ? AND asset_type = ?
+            WHERE symbol = ? AND asset_type = ?{mode_clause}
             ORDER BY generated_at DESC
             LIMIT 1
             """,
-            (symbol.strip().upper(), asset_type.strip().upper()),
+            params,
         ).fetchone()
     return dict(row) if row else {}
 

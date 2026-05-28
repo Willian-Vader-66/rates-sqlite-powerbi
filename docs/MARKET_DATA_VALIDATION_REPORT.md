@@ -64,7 +64,7 @@ External live validation is optional and non-blocking. This run reported `SKIPPE
 - `.\.venv\Scripts\python.exe -m fx_rates dashboard audit` -> OK, no alerts
 - `.\.venv\Scripts\python.exe -m fx_rates dashboard audit-market` -> OK, demo flags only
 - `.\.venv\Scripts\python.exe -m fx_rates dashboard audit-market --with-live-sample` -> SKIPPED, no external provider/network sample available
-- `.\.venv\Scripts\python.exe -m fx_rates dashboard prepare-demo --years 4 --demo` -> 68 instruments, 83638 historical rows
+- `.\.venv\Scripts\python.exe -m fx_rates dashboard prepare-demo --years 1 --demo` -> 68 instruments, 83638 historical rows
 - Maven `mvn -U clean test` with Windows trust store -> 16 passed
 - Maven `mvn -q -DskipTests compile` with Windows trust store -> OK
 - `run_visual_test.ps1 -PrepareDemo -SkipTests -NoFrontend` -> OK, backend stopped
@@ -109,9 +109,8 @@ The current live hardening adds explicit data-loss protection around `prepare-li
 Validation target after a placeholder or bad Twelve Data key:
 
 ```powershell
-python -m fx_rates dashboard prepare-live --years 4 --asset-type STOCK --symbols AAPL,MSFT,NVDA --replace-demo
+python -m fx_rates dashboard prepare-live --days 365 --asset-type STOCK --symbols AAPL,MSFT,NVDA --replace-demo
 python -m fx_rates dashboard audit-market
 ```
 
 Expected result: live ingest fails before DB mutation and AAPL/MSFT/NVDA retain their existing demo history.
-

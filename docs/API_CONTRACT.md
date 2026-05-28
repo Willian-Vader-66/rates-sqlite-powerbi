@@ -14,13 +14,15 @@ Start command:
 python -m fx_rates serve --host 127.0.0.1 --port 8000
 ```
 
-Prepare local demo data first when the dashboard is empty:
+Build/promote a live SQLite database first when the dashboard is empty:
 
 ```powershell
-cd C:\Projetos_Local\rates-sqlite-powerbi
+cd C:\Projetos_Local\rates-sqlite-powerbi-git
 .\.venv\Scripts\Activate.ps1
-$env:MARKET_DATA_DEMO_MODE='true'
-python -m fx_rates dashboard prepare-demo --years 4 --demo
+python -m fx_rates dashboard build-live-db --days 365 --db-path .tmp/live-main-candidate.sqlite --external-test
+python -m fx_rates dashboard validate-samples --db-path .tmp/live-main-candidate.sqlite --samples-per-symbol 5 --external-test
+python -m fx_rates dashboard audit-live --db-path .tmp/live-main-candidate.sqlite
+python -m fx_rates dashboard promote-live --candidate-db .tmp/live-main-candidate.sqlite --to-db data/fx.sqlite --backup
 python -m fx_rates serve --host 127.0.0.1 --port 8000
 ```
 
@@ -41,7 +43,7 @@ The JavaFX app remains HTTP-only and chooses history endpoints by asset type:
 - `CRYPTO`: `GET /api/crypto/history?symbol=BTC&start=YYYY-MM-DD&end=YYYY-MM-DD`
 - `MACRO`: `GET /api/macro/history?indicator_code=SELIC_DAILY&start=YYYY-MM-DD&end=YYYY-MM-DD`
 
-Supported frontend ranges are `30D`, `90D`, `6M`, `1Y`, and `4Y`. The frontend only requests history for the selected instrument and does not load all symbols for long ranges. Overview charts default to `90D`.
+Supported standard frontend ranges are `7D`, `30D`, `90D`, `180D`, and `365D`. Future ranges `3Y`, `5Y`, and `10Y` require advanced history providers and are not enabled in the standard release. Overview charts default to `90D`.
 
 ## GET /health
 
@@ -86,7 +88,7 @@ Example response:
   "date_min": "2022-05-04",
   "date_max": "2026-05-03",
   "is_empty": false,
-  "recommended_prepare_command": "python -m fx_rates dashboard prepare-demo --years 4 --demo"
+  "recommended_prepare_command": "python -m fx_rates dashboard build-live-db --days 365 --db-path .tmp/live-main-candidate.sqlite --external-test"
 }
 ```
 
@@ -95,7 +97,7 @@ Empty database response includes:
 ```json
 {
   "is_empty": true,
-  "message": "No data loaded. Run prepare-demo."
+  "message": "No live data loaded. Run: python -m fx_rates dashboard build-live-db --days 365 --db-path .tmp/live-main-candidate.sqlite --external-test"
 }
 ```
 
@@ -388,7 +390,7 @@ Returns curated chart groups for the Overview page. The default period is `90D`.
 
 Optional params:
 
-- `period`: one of `30D`, `90D`, `6M`, `1Y`, `4Y`
+- `period`: one of `7D`, `30D`, `90D`, `180D`, `365D`
 - `days`: legacy numeric override
 
 Chart and instrument-like responses expose display metadata:
@@ -504,7 +506,7 @@ When a fixed chart is not populated, the chart object still returns `points: []`
 ```json
 {
   "points": [],
-  "message": "No data loaded. Run: python -m fx_rates dashboard prepare-demo --years 4 --demo"
+  "message": "No live data loaded. Run: python -m fx_rates dashboard build-live-db --days 365 --db-path .tmp/live-main-candidate.sqlite --external-test"
 }
 ```
 

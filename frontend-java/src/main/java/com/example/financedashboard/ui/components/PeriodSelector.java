@@ -3,6 +3,7 @@ package com.example.financedashboard.ui.components;
 import com.example.financedashboard.service.MarketDataService.HistoryRange;
 import javafx.geometry.Pos;
 import javafx.scene.control.Button;
+import javafx.scene.control.Tooltip;
 import javafx.scene.layout.HBox;
 
 import java.util.EnumMap;
@@ -23,6 +24,10 @@ public class PeriodSelector extends HBox {
             Button button = new Button(range.label());
             button.getStyleClass().add("period-chip");
             button.setOnAction(event -> setValue(range));
+            if (!range.enabled()) {
+                button.setDisable(true);
+                Tooltip.install(button, new Tooltip(range.disabledTooltip()));
+            }
             buttons.put(range, button);
             getChildren().add(button);
         }
@@ -42,11 +47,14 @@ public class PeriodSelector extends HBox {
     }
 
     public void setLoading(boolean loading) {
-        buttons.values().forEach(button -> button.setDisable(loading));
+        buttons.forEach((range, button) -> button.setDisable(loading || !range.enabled()));
     }
 
     private void setValue(HistoryRange newValue, boolean notify) {
         HistoryRange safeValue = newValue == null ? HistoryRange.NINETY_D : newValue;
+        if (!safeValue.enabled()) {
+            return;
+        }
         if (safeValue == value && notify) {
             return;
         }

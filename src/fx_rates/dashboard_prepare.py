@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import math
 from dataclasses import dataclass, replace
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Iterable
 
 from .api_frankfurter import FrankfurterClient, normalize_timeseries
@@ -28,6 +28,7 @@ from .db_sqlite import (
 )
 from .macro_providers import MacroIndicatorConfig, MockMacroProvider, build_macro_provider, load_macro_reference
 from .market_providers import MockMarketDataProvider, build_market_provider
+from .live_history import LiveHistoryPolicy, days_from_args, validate_requested_days
 from .models import (
     CryptoPriceDailyRow,
     FxRateRow,
@@ -37,6 +38,7 @@ from .models import (
     StockPriceDailyRow,
 )
 from .provider_status import providers_status
+from .redaction import redact_text
 from .utils import normalize_symbol_list, utc_now_iso
 from .watchlist import load_currency_reference, load_stock_watchlist
 
@@ -102,7 +104,8 @@ class LiveStage:
 
 def run_prepare_demo_dashboard(
     settings: Settings,
-    years: int = 4,
+    years: int | None = None,
+    days: int | None = None,
     demo: bool = False,
     stock_reference: str = DEFAULT_DASHBOARD_STOCK_REFERENCE,
     currency_reference: str = DEFAULT_CURRENCY_REFERENCE,
@@ -111,15 +114,14 @@ def run_prepare_demo_dashboard(
     stock_limit: int = 32,
     symbols: list[str] | None = None,
 ) -> int:
-    if years <= 0:
-        raise ValueError("--years deve ser maior que zero")
     if stock_limit <= 0:
         raise ValueError("--stock-limit deve ser maior que zero")
 
+    requested_days = days_from_args(days=days, years=years, default_days=365)
     effective_settings = replace(settings, market_data_demo_mode=True, market_data_provider="mock") if demo else settings
     selected_symbols = normalize_symbol_list(symbols) if symbols else None
     end_day = date.today()
-    start_day = end_day - timedelta(days=(years * 366) + 7)
+    start_day = end_day - timedelta(days=requested_days - 1)
     start = start_day.isoformat()
     end = end_day.isoformat()
 
@@ -151,13 +153,14 @@ def run_prepare_demo_dashboard(
         _print_readiness_summary(settings.db_path)
         return 0
     except Exception as exc:
-        finish_ingest_run(settings.db_path, run_id, status="FAIL", row_count=0, error=str(exc))
+        finish_ingest_run(settings.db_path, run_id, status="FAIL", row_count=0, error=redact_text(exc))
         raise
 
 
 def run_prepare_live_dashboard(
     settings: Settings,
-    years: int = 4,
+    years: int | None = None,
+    days: int | None = None,
     allow_mixed: bool = False,
     replace_demo: bool = False,
     symbols: list[str] | None = None,
@@ -168,13 +171,22 @@ def run_prepare_live_dashboard(
     macro_reference: str = DEFAULT_MACRO_REFERENCE,
     stock_limit: int = 32,
 ) -> int:
-    if years <= 0:
-        raise ValueError("--years deve ser maior que zero")
     if stock_limit <= 0:
         raise ValueError("--stock-limit deve ser maior que zero")
 
     selected_asset_types = _selected_asset_types(asset_type)
     selected_symbols = normalize_symbol_list(symbols) if symbols else None
+    requested_days = days_from_args(days=days, years=years, default_days=settings.live_default_days)
+    validate_requested_days(
+        LiveHistoryPolicy(
+            default_days=settings.live_default_days,
+            max_free_days=settings.live_max_free_days,
+            mode=settings.live_history_mode,
+            advanced_max_years=settings.live_advanced_max_years,
+        ),
+        requested_days,
+        provider_plan=settings.coingecko_api_plan if "CRYPTO" in selected_asset_types else None,
+    )
     provider_state = providers_status(settings, test_external=False)
     missing = [
         item for item in provider_state["providers"]
@@ -188,9 +200,9 @@ def run_prepare_live_dashboard(
                 f"{item['asset_type']}: provider={item['provider']} configured={item['configured']} "
                 f"available={item['available']} key_present={item.get('key_present')} "
                 f"key_valid_format={item.get('key_valid_format')} missing_env={missing_env} message={item.get('message')}"
-            )
+        )
         print("Run: python -m fx_rates providers status")
-        print("Demo remains available with: python -m fx_rates dashboard prepare-demo --years 4 --demo")
+        print("Live-first staging command: python -m fx_rates dashboard build-live-db --days 365 --db-path .tmp/live-main-candidate.sqlite --external-test")
         return 2
 
     data_mode = get_data_mode_summary(settings.db_path)
@@ -205,13 +217,15 @@ def run_prepare_live_dashboard(
         return 3
 
     end_day = date.today()
-    start_day = end_day - timedelta(days=(years * 366) + 7)
+    start_day = end_day - timedelta(days=requested_days - 1)
     start = start_day.isoformat()
     end = end_day.isoformat()
     print("Preparing LIVE dashboard data")
     print(f"SQLite DB path: {get_system_status(settings.db_path)['db_path']}")
     print(f"Asset types: {', '.join(selected_asset_types)}")
     print(f"Symbols: {', '.join(selected_symbols) if selected_symbols else 'reference defaults'}")
+    print(f"Requested days: {requested_days}")
+    print(f"History mode: {settings.live_history_mode}")
 
     run_id = start_ingest_run(
         db_path=settings.db_path,
@@ -232,9 +246,16 @@ def run_prepare_live_dashboard(
         if "MACRO" in selected_asset_types:
             stage.extend(_stage_live_macro(settings, macro_reference, start, end, selected_symbols))
 
-        validation_failures = stage.failures + _validate_live_stage(stage, selected_asset_types, selected_symbols)
-        if validation_failures and not allow_mixed:
-            message = "prepare-live aborted before DB mutation: live fetch failed; existing demo/live data preserved. " + "; ".join(validation_failures)
+        fetch_failures = list(stage.failures)
+        validation_failures = _validate_live_stage(stage, selected_asset_types, selected_symbols, settings=settings)
+        if validation_failures:
+            all_failures = fetch_failures + validation_failures
+            message = "prepare-live aborted before DB mutation: staged live data is inconsistent; existing demo/live data preserved. " + "; ".join(all_failures)
+            print(message)
+            finish_ingest_run(settings.db_path, run_id, status="FAIL", row_count=0, error=message)
+            return 4
+        if fetch_failures and not allow_mixed:
+            message = "prepare-live aborted before DB mutation: live fetch failed; existing demo/live data preserved. " + "; ".join(fetch_failures)
             print(message)
             finish_ingest_run(settings.db_path, run_id, status="FAIL", row_count=0, error=message)
             return 4
@@ -267,18 +288,18 @@ def run_prepare_live_dashboard(
         finish_ingest_run(
             settings.db_path,
             run_id,
-            status="OK" if not validation_failures else "WARN",
+            status="OK" if not fetch_failures else "WARN",
             row_count=row_count,
-            error="; ".join(validation_failures) if validation_failures else None,
+            error="; ".join(fetch_failures) if fetch_failures else None,
         )
         _print_readiness_summary(settings.db_path)
-        if validation_failures:
+        if fetch_failures:
             print("Live ingest completed with explicit mixed/unsupported warnings:")
-            for failure in validation_failures:
+            for failure in fetch_failures:
                 print(f"  {failure}")
         return 0
     except Exception as exc:
-        message = f"prepare-live failed: {exc}"
+        message = f"prepare-live failed: {redact_text(exc)}"
         print(message)
         finish_ingest_run(settings.db_path, run_id, status="FAIL", row_count=0, error=message)
         return 6
@@ -295,11 +316,12 @@ def _selected_asset_types(asset_type: str | None) -> list[str]:
 
 
 MIN_LIVE_HISTORY_ROWS = 2
+MIN_LIVE_CRYPTO_ROWS_ADVANCED = 1300
 LIVE_MACRO_UNITS = {"% a.a.", "% a.m.", "% a.d.", "index"}
 DEMO_PROVIDER_MARKERS = ("mock", "demo")
 
 
-def _validate_live_stage(stage: LiveStage, asset_types: list[str], symbols: list[str] | None) -> list[str]:
+def _validate_live_stage(stage: LiveStage, asset_types: list[str], symbols: list[str] | None, *, settings: Settings) -> list[str]:
     failures: list[str] = []
     quote_map = {(row.asset_type.upper(), row.symbol.upper()): row for row in stage.quote_rows}
     for instrument in stage.instruments:
@@ -308,7 +330,7 @@ def _validate_live_stage(stage: LiveStage, asset_types: list[str], symbols: list
     if "STOCK" in asset_types:
         stock_groups = _group_by_symbol(stage.stock_rows, lambda row: row.symbol)
         expected = _expected_symbols(stage.instruments, "STOCK", symbols)
-        failures.extend(_validate_symbol_groups("STOCK", expected, stock_groups, quote_map, lambda row: row.close, lambda row: row.date))
+        failures.extend(_validate_symbol_groups("STOCK", expected, stock_groups, quote_map, lambda row: row.close, lambda row: row.date, fail_pct=settings.live_quote_fail_pct))
         for symbol, rows in stock_groups.items():
             for row in rows:
                 failures.extend(_live_origin_failures("STOCK", "STOCK", symbol, row.data_mode, row.provider))
@@ -319,7 +341,7 @@ def _validate_live_stage(stage: LiveStage, asset_types: list[str], symbols: list
     if "FX" in asset_types:
         fx_groups = _group_by_symbol(stage.fx_rows, lambda row: row.symbol)
         expected = _expected_symbols(stage.instruments, "FX", symbols)
-        failures.extend(_validate_symbol_groups("FX", expected, fx_groups, quote_map, lambda row: row.rate, lambda row: row.date))
+        failures.extend(_validate_symbol_groups("FX", expected, fx_groups, quote_map, lambda row: row.rate, lambda row: row.date, fail_pct=settings.live_quote_fail_pct))
         for symbol, rows in fx_groups.items():
             for row in rows:
                 failures.extend(_live_origin_failures("FX", "FX", symbol, row.data_mode, row.source))
@@ -328,7 +350,7 @@ def _validate_live_stage(stage: LiveStage, asset_types: list[str], symbols: list
     if "CRYPTO" in asset_types:
         crypto_groups = _group_by_symbol(stage.crypto_rows, lambda row: row.symbol)
         expected = _expected_symbols(stage.instruments, "CRYPTO", symbols)
-        failures.extend(_validate_symbol_groups("CRYPTO", expected, crypto_groups, quote_map, lambda row: row.price_usd, lambda row: row.date))
+        failures.extend(_validate_symbol_groups("CRYPTO", expected, crypto_groups, quote_map, lambda row: row.price_usd, lambda row: row.date, fail_pct=settings.live_quote_fail_pct))
         for symbol, rows in crypto_groups.items():
             for row in rows:
                 failures.extend(_live_origin_failures("CRYPTO", "CRYPTO", symbol, row.data_mode, row.provider))
@@ -337,7 +359,7 @@ def _validate_live_stage(stage: LiveStage, asset_types: list[str], symbols: list
     if "MACRO" in asset_types:
         macro_groups = _group_by_symbol(stage.macro_rows, lambda row: row.indicator_code)
         expected = _expected_symbols(stage.instruments, "MACRO", symbols)
-        failures.extend(_validate_symbol_groups("MACRO", expected, macro_groups, quote_map, lambda row: row.value, lambda row: row.date, allow_negative=True))
+        failures.extend(_validate_symbol_groups("MACRO", expected, macro_groups, quote_map, lambda row: row.value, lambda row: row.date, allow_negative=True, fail_pct=settings.live_quote_fail_pct))
         for symbol, rows in macro_groups.items():
             for row in rows:
                 failures.extend(_live_origin_failures("MACRO", "MACRO", symbol, row.data_mode, row.source))
@@ -365,7 +387,17 @@ def _group_by_symbol(rows: Iterable[object], key_func) -> dict[str, list[object]
     return grouped
 
 
-def _validate_symbol_groups(asset_type: str, expected: set[str], groups: dict[str, list[object]], quote_map: dict[tuple[str, str], MarketQuoteRow], value_func, date_func, *, allow_negative: bool = False) -> list[str]:
+def _validate_symbol_groups(
+    asset_type: str,
+    expected: set[str],
+    groups: dict[str, list[object]],
+    quote_map: dict[tuple[str, str], MarketQuoteRow],
+    value_func,
+    date_func,
+    *,
+    allow_negative: bool = False,
+    fail_pct: float = 5.0,
+) -> list[str]:
     failures: list[str] = []
     for symbol in sorted(expected):
         rows = groups.get(symbol, [])
@@ -386,8 +418,11 @@ def _validate_symbol_groups(asset_type: str, expected: set[str], groups: dict[st
                 failures.append(f"{asset_type} {symbol}: missing history value")
             elif not allow_negative and float(value) <= 0:
                 failures.append(f"{asset_type} {symbol}: non-positive history value")
-        if dates and max(dates) < min(dates):
-            failures.append(f"{asset_type} {symbol}: incoherent date range")
+        if dates:
+            if max(dates) < min(dates):
+                failures.append(f"{asset_type} {symbol}: incoherent date range")
+            if max(dates) > date.today() + timedelta(days=1):
+                failures.append(f"{asset_type} {symbol}: future history date {max(dates).isoformat()}")
         quote = quote_map.get((asset_type, symbol))
         if quote is None:
             failures.append(f"{asset_type} {symbol}: missing latest quote")
@@ -396,8 +431,18 @@ def _validate_symbol_groups(asset_type: str, expected: set[str], groups: dict[st
             latest_value = value_func(latest)
             if latest_value not in (None, 0) and quote.price is not None:
                 diff_pct = abs((float(quote.price) / float(latest_value)) - 1.0) * 100.0
-                if diff_pct > 1.0:
+                if diff_pct > fail_pct:
                     failures.append(f"{asset_type} {symbol}: latest quote differs from history by {diff_pct:.2f}%")
+            if quote.quote_time and dates:
+                try:
+                    quote_date = date.fromisoformat(str(quote.quote_time)[:10])
+                except ValueError:
+                    failures.append(f"{asset_type} {symbol}: invalid latest quote date {quote.quote_time}")
+                else:
+                    if quote_date < max(dates):
+                        failures.append(f"{asset_type} {symbol}: latest quote older than history")
+                    if quote_date > date.today() + timedelta(days=1):
+                        failures.append(f"{asset_type} {symbol}: future latest quote date {quote_date.isoformat()}")
     return failures
 
 
@@ -453,11 +498,12 @@ def _stage_live_stocks(
                 for row in history
             ]
         except Exception as exc:
-            failures.append(f"STOCK {instrument.symbol}: provider={provider_label} error={exc}")
+            failures.append(f"STOCK {instrument.symbol}: provider={provider_label} error={redact_text(exc)}")
             continue
         if not history:
             failures.append(f"STOCK {instrument.symbol}: provider={provider_label} returned no history")
             continue
+        history = sorted(history, key=lambda row: row.date)
         quote = _stock_quote_from_history(instrument.symbol, instrument.exchange, history)
         if quote is not None:
             quote_rows.append(replace(quote, provider=provider_label, data_mode="live", source_updated_at=quote.quote_time))
@@ -521,7 +567,7 @@ def _stage_live_fx(
                     for row in normalize_timeseries(payload, base="USD", source=provider_label)
                 ]
             except Exception as exc:
-                return LiveStage([], [], [], [], [], [], [f"FX USD/{','.join(external_symbols)}: provider={provider_label} error={exc}"])
+                return LiveStage([], [], [], [], [], [], [f"FX USD/{','.join(external_symbols)}: provider={provider_label} error={redact_text(exc)}"])
         dates = sorted({row.date for row in fx_rows})
         if "USD" in requested_symbols:
             if not dates:
@@ -559,6 +605,9 @@ def _stage_live_crypto(
         demo_mode=False,
         timeout_seconds=settings.timeout_seconds,
         max_retries=settings.max_retries,
+        coingecko_api_plan=settings.coingecko_api_plan,
+        coingecko_demo_api_key=settings.coingecko_demo_api_key,
+        coingecko_pro_api_key=settings.coingecko_pro_api_key,
     )
     provider_label = "fake_live" if settings.crypto_provider == "fake_live" else provider.name
     wanted = set(symbols or DASHBOARD_CRYPTO_SYMBOLS)
@@ -574,16 +623,31 @@ def _stage_live_crypto(
                 for row in provider.fetch_daily(asset, start, end)
             ]
         except Exception as exc:
-            failures.append(f"CRYPTO {asset.symbol}: provider={provider_label} error={exc}")
+            failures.append(f"CRYPTO {asset.symbol}: provider={provider_label} error={redact_text(exc)}")
             continue
         if not history:
             failures.append(f"CRYPTO {asset.symbol}: provider={provider_label} returned no history")
             continue
+        min_rows = _min_crypto_rows_for_range(start, end)
+        if len(history) < min_rows:
+            failures.append(f"CRYPTO {asset.symbol}: insufficient live history rows ({len(history)} < {min_rows})")
         quote = _crypto_quote_from_history(asset, history)
         if quote is not None:
             quote_rows.append(replace(quote, provider=provider_label, data_mode="live", source_updated_at=quote.quote_time))
         history_rows.extend(history)
     return LiveStage(instruments, [], [], history_rows, [], quote_rows, failures)
+
+
+def _min_crypto_rows_for_range(start: str, end: str) -> int:
+    try:
+        start_day = date.fromisoformat(str(start)[:10])
+        end_day = min(date.fromisoformat(str(end)[:10]), datetime.now(timezone.utc).date())
+    except ValueError:
+        return MIN_LIVE_HISTORY_ROWS
+    days = max(1, (end_day - start_day).days + 1)
+    if days >= 365 * 3:
+        return MIN_LIVE_CRYPTO_ROWS_ADVANCED
+    return max(MIN_LIVE_HISTORY_ROWS, int(days * 0.90))
 
 
 def _stage_live_macro(
@@ -623,7 +687,7 @@ def _stage_live_macro(
                 for row in provider.fetch_daily(indicator, start, end)
             ]
         except Exception as exc:
-            failures.append(f"MACRO {indicator.indicator_code}: provider={provider_label} error={exc}")
+            failures.append(f"MACRO {indicator.indicator_code}: provider={provider_label} error={redact_text(exc)}")
             continue
         if not rows:
             failures.append(f"MACRO {indicator.indicator_code}: provider={provider_label} returned no history")
@@ -655,6 +719,7 @@ def _prepare_stocks(settings: Settings, reference: str, start: str, end: str, st
             exchange=instrument.exchange,
         )
         rows_written += upsert_stock_prices_daily(settings.db_path, history)
+        history = sorted(history, key=lambda row: row.date)
         quote = _stock_quote_from_history(instrument.symbol, instrument.exchange, history)
         if quote is not None:
             quote_rows.append(quote)
@@ -668,7 +733,7 @@ def _stock_quote_from_history(
     exchange: str | None,
     history: list[StockPriceDailyRow],
 ) -> MarketQuoteRow | None:
-    valid_rows = [row for row in history if row.close is not None]
+    valid_rows = sorted((row for row in history if row.close is not None), key=lambda row: row.date)
     if not valid_rows:
         return None
     latest = valid_rows[-1]
@@ -736,6 +801,9 @@ def _prepare_crypto(settings: Settings, reference: str, start: str, end: str, sy
         demo_mode=settings.market_data_demo_mode,
         timeout_seconds=settings.timeout_seconds,
         max_retries=settings.max_retries,
+        coingecko_api_plan=settings.coingecko_api_plan,
+        coingecko_demo_api_key=settings.coingecko_demo_api_key,
+        coingecko_pro_api_key=settings.coingecko_pro_api_key,
     )
     wanted = set(symbols or DASHBOARD_CRYPTO_SYMBOLS)
     assets = [asset for asset in _select_crypto_assets(reference) if asset.symbol in wanted]
@@ -757,7 +825,7 @@ def _crypto_quote_from_history(
     asset: CryptoAssetConfig,
     history: list[CryptoPriceDailyRow],
 ) -> MarketQuoteRow | None:
-    valid_rows = [row for row in history if row.price_usd is not None]
+    valid_rows = sorted((row for row in history if row.price_usd is not None), key=lambda row: row.date)
     if not valid_rows:
         return None
     latest = valid_rows[-1]
@@ -829,6 +897,10 @@ def _crypto_instruments(settings: Settings, assets: Iterable[CryptoAssetConfig])
             priority=asset.priority,
             created_at=now,
             updated_at=now,
+            display_name=asset.name,
+            unit_label="USD",
+            value_label="Crypto Price",
+            expected_frequency="daily",
         )
         for asset in assets
     ]
@@ -850,9 +922,24 @@ def _macro_instruments(settings: Settings, indicators: Iterable[MacroIndicatorCo
             priority=indicator.priority,
             created_at=now,
             updated_at=now,
+            display_name=indicator.indicator_name,
+            unit_label=indicator.unit,
+            value_label=_macro_value_label(indicator.indicator_code),
+            expected_frequency="monthly" if indicator.indicator_code.endswith("_MONTHLY") else "business_daily",
         )
         for indicator in indicators
     ]
+
+
+def _macro_value_label(indicator_code: str) -> str:
+    code = indicator_code.strip().upper()
+    if code in {"SELIC_DAILY", "CDI_DAILY"}:
+        return "Daily Rate"
+    if code == "IPCA_MONTHLY":
+        return "Monthly Inflation"
+    if code.endswith("_MONTHLY"):
+        return "Monthly Rate"
+    return "Macro Value"
 
 
 def _latest_fx_quotes(rows: list[FxRateRow]) -> list[MarketQuoteRow]:

@@ -38,6 +38,10 @@ def load_stock_watchlist(path: str, *, provider: str = "twelvedata") -> list[Ins
                     priority=_parse_priority(item.get("priority")),
                     created_at=now,
                     updated_at=now,
+                    display_name=_blank_to_none(item.get("name")) or symbol,
+                    unit_label=(_blank_to_none(item.get("currency")) or "USD").upper(),
+                    value_label="Stock Price",
+                    expected_frequency="business_daily",
                 )
             )
 
@@ -70,6 +74,10 @@ def load_currency_reference(path: str, *, provider: str = "frankfurter") -> list
                     priority=index,
                     created_at=now,
                     updated_at=now,
+                    display_name=_blank_to_none(item.get("name")) or f"USD/{symbol}",
+                    unit_label=f"{symbol} per 1 USD",
+                    value_label="Exchange Rate",
+                    expected_frequency="business_daily",
                 )
             )
     return rows

@@ -1,6 +1,6 @@
 # fx-rates-sqlite-powerbi
 
-Local financial market data backend that fetches public exchange rates from the Frankfurter API, stores FX, stock, crypto, and macro history in SQLite with idempotent UPSERT behavior, runs lightweight analysis over stored data, and exposes a local HTTP API for JavaFX or future front-ends.
+Finance Monitor is a LIVE-FIRST local financial dashboard: it builds a validated SQLite database with the last 365 days of real FX, stock, crypto, and macro history, refreshes recent data incrementally, validates samples against external providers, and exposes a local HTTP API for the JavaFX frontend. Advanced history up to 10 years is reserved for paid providers that explicitly support longer ranges.
 
 ## What This Project Is
 
@@ -13,7 +13,12 @@ This repository started as a small but production-minded local pipeline for fore
 - `macro backfill`, `macro daily`, and `macro status` add macro indicators such as Selic
 - `quotes poll` refreshes latest quotes through safe polling for selected symbols
 - `analyze now` creates stock, FX, crypto, and macro analysis snapshots from data already stored in SQLite
-- `dashboard prepare-demo` prepares a complete local SQLite dataset for the JavaFX Finance Monitor
+- `dashboard build-live-db` creates a fresh real-data staging database for the JavaFX Finance Monitor
+- `dashboard refresh-live` incrementally updates an existing live SQLite database
+- `dashboard validate-samples` checks stored values against provider samples
+- `dashboard audit-live` proves the candidate DB is coherent before promotion
+- `dashboard promote-live` safely promotes a validated staging DB to `data/fx.sqlite` with backup
+- `dashboard prepare-demo` remains available only for dev/test/offline work
 - `dashboard audit` reports dashboard readiness, coverage, missing quotes/analysis, and duplicate instrument keys
 - `serve` exposes a local HTTP API for Java or other front-ends
 - backfill/time-series responses are cached on disk
@@ -24,7 +29,7 @@ This repository started as a small but production-minded local pipeline for fore
 
 This is not a professional trading platform. Quote collection is near-real-time polling, not a tick-by-tick feed, and provider rate limits should be respected.
 
-## Data Modes
+## Live-First Data Modes
 
 Market-data origin is explicit:
 
@@ -33,10 +38,14 @@ Market-data origin is explicit:
 - `mixed`: demo and live records are both present.
 - `unknown`: origin cannot be trusted yet.
 
-Prepare demo data explicitly:
+Build and validate the live candidate database first:
 
 ```powershell
-python -m fx_rates dashboard prepare-demo --years 4 --demo
+python -m fx_rates providers status --external-test
+python -m fx_rates dashboard build-live-db --days 365 --db-path .tmp/live-main-candidate.sqlite --external-test
+python -m fx_rates dashboard validate-samples --db-path .tmp/live-main-candidate.sqlite --samples-per-symbol 5 --external-test
+python -m fx_rates dashboard audit-live --db-path .tmp/live-main-candidate.sqlite
+python -m fx_rates api smoke-live --db-path .tmp/live-main-candidate.sqlite --port 8001
 ```
 
 Check providers and audits:
@@ -47,16 +56,14 @@ python -m fx_rates dashboard audit
 python -m fx_rates dashboard audit-market
 ```
 
-Live preparation fetches supported providers, writes `data_mode=live`, and does not silently fall back to demo:
+Promote only after the candidate DB passes validation:
 
 ```powershell
-python -m fx_rates dashboard prepare-live --years 4
-python -m fx_rates dashboard prepare-live --years 4 --allow-mixed
-python -m fx_rates dashboard prepare-live --years 4 --asset-type FX --symbols BRL,EUR
-python -m fx_rates dashboard prepare-live --years 4 --asset-type STOCK --symbols AAPL,MSFT --replace-demo
+python -m fx_rates dashboard promote-live --candidate-db .tmp/live-main-candidate.sqlite --dry-run
+python -m fx_rates dashboard promote-live --candidate-db .tmp/live-main-candidate.sqlite --to-db data/fx.sqlite --backup
 ```
 
-See `docs/DATA_MODE_STRATEGY.md` and `docs/LIVE_PROVIDERS_SETUP.md`.
+Demo data can still be created explicitly for tests and local UI development, but it is not the product mode. See `docs/LIVE_DATA_SCOPE.md`, `docs/LIVE_FIRST_PRODUCT_SCOPE.md`, `docs/LIVE_FULL_TEST_PLAN.md`, and `docs/LIVE_PROMOTION_GUIDE.md`.
 
 ## Architecture
 
@@ -66,7 +73,7 @@ Frankfurter API -> FX ingest CLI -----------+
 Twelve Data API -> stock/quote providers -> Python backend -> SQLite
 CoinGecko API  -> crypto provider ----------+        |
 BCB SGS API    -> macro provider -----------+        |
-Mock providers -> demo/test data -----------+        |
+Test providers -> dev/test data ------------+        |
                                                      v
                                            FastAPI local HTTP API
                                                      |
@@ -128,6 +135,9 @@ LOG_LEVEL=INFO
 TIMEOUT_SECONDS=20
 MAX_RETRIES=3
 TWELVE_DATA_API_KEY=
+COINGECKO_API_PLAN=public
+COINGECKO_DEMO_API_KEY=
+COINGECKO_PRO_API_KEY=
 MARKET_DATA_PROVIDER=twelvedata
 MARKET_DATA_DEMO_MODE=false
 API_HOST=127.0.0.1
@@ -136,14 +146,68 @@ API_PORT=8000
 
 CLI flags override `.env` values for the same setting.
 
-For stock data, create a Twelve Data API key and set `TWELVE_DATA_API_KEY`. Macro data uses Banco Central SGS and crypto data uses CoinGecko when demo mode is off. For local demos, tests, and UI work without external API access, set:
+For stock data, create a Twelve Data API key and set `TWELVE_DATA_API_KEY` in your shell environment. Crypto data uses CoinGecko public access by default; if you use a CoinGecko demo or pro key, set `COINGECKO_API_PLAN` plus the matching key environment variable. Macro data uses Banco Central SGS. Do not store API keys in committed files, committed `.env` files, docs, logs, or reports.
+
+If provider checks fail because of Windows TLS/CA validation, run the environment doctor before rebuilding the live DB:
+
+```powershell
+python -m fx_rates env doctor
+```
+
+Optional Windows trust store support is available through:
+
+```powershell
+$env:FX_RATES_USE_TRUSTSTORE="1"
+python -m pip install --upgrade certifi truststore
+```
+
+For a local PowerShell setup that configures certifi/truststore and asks for the Twelve Data key without writing it to disk, prefer the one-shot pipeline:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run_live_pipeline.ps1
+```
+
+`run_live_pipeline.ps1` prompts for `TWELVE_DATA_API_KEY` with hidden input, keeps TLS settings and the key in the same PowerShell process, runs provider checks, builds the staging DB, validates samples, audits, runs API smoke, and finishes with promotion dry-run only. It prints only `present`, `key_length`, and a masked preview such as `abcd****`.
+
+If the key appeared in a screenshot, terminal transcript, log, or shell history, rotate it in the Twelve Data dashboard before running release validation again.
+
+If you only want to configure the current terminal session, dot-source the setup script:
+
+```powershell
+cd C:\Projetos_Local\rates-sqlite-powerbi-git
+Set-ExecutionPolicy -Scope Process Bypass -Force
+. .\scripts\setup_live_env.ps1
+```
+
+Running the setup script with `powershell.exe -File` is valid for the commands inside that script, but variables created there do not persist back to the original terminal:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_live_env.ps1
+```
+
+See `docs/POWERSHELL_SESSION_GUIDE.md` for details.
+
+Manual live validation is also valid, but the key must be set in the same terminal session that runs the commands:
+
+```powershell
+cd C:\Projetos_Local\rates-sqlite-powerbi-git
+$secure = Read-Host "Paste Twelve Data API key" -AsSecureString
+$bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+try { $env:TWELVE_DATA_API_KEY = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+
+.\.venv\Scripts\python.exe -m fx_rates providers status --external-test
+.\.venv\Scripts\python.exe -m fx_rates dashboard validate-samples --db-path .tmp\live-main-candidate.sqlite --samples-per-symbol 5 --external-test
+.\.venv\Scripts\python.exe -m fx_rates dashboard promote-live --candidate-db .tmp\live-main-candidate.sqlite --dry-run
+```
+
+For automated tests, offline local development, and UI experiments without external API access, set:
 
 ```dotenv
 MARKET_DATA_DEMO_MODE=true
 ```
 
-Demo mode and `--demo` use deterministic synthetic data designed for portfolio demos and local validation without API keys.
-It is visually plausible, but it is not real market history.
+Demo mode and `--demo` use deterministic synthetic data.
+It is not real market history and must not be used as the final product database.
 Stocks use `MockMarketDataProvider`.
 Macro and crypto demo data come from `MockMacroProvider` and `MockCryptoProvider`; the Java UI never hardcodes fake market data.
 
@@ -151,22 +215,21 @@ Dependency note: `httpx` is listed with the main requirements because FastAPI's 
 
 ## CLI Commands
 
-### Prepare The Local Dashboard
+### Como Rodar Com Dados Reais
 
-Use this before opening the JavaFX Finance Monitor on a fresh or sparse SQLite database. It imports the curated dashboard instruments, creates deterministic historical demo data, writes latest quotes, and generates analysis snapshots in the configured SQLite database.
+Use this flow before opening the JavaFX Finance Monitor for release or portfolio use. It creates a staging SQLite database with real data, validates it, then promotes it to the main local DB only after checks pass.
 
 ```powershell
-cd C:\Projetos_Local\rates-sqlite-powerbi
-.\.venv\Scripts\Activate.ps1
-$env:MARKET_DATA_DEMO_MODE='true'
-python -m fx_rates dashboard prepare-demo --years 4 --demo
-python -m fx_rates serve --host 127.0.0.1 --port 8000
+cd C:\Projetos_Local\rates-sqlite-powerbi-git
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run_live_pipeline.ps1
+.\.venv\Scripts\python.exe -m fx_rates dashboard promote-live --candidate-db .tmp\live-main-candidate.sqlite --to-db data\fx.sqlite --backup
+.\.venv\Scripts\python.exe -m fx_rates serve --host 127.0.0.1 --port 8000
 ```
 
 In another terminal:
 
 ```powershell
-cd C:\Projetos_Local\rates-sqlite-powerbi\frontend-java
+cd C:\Projetos_Local\rates-sqlite-powerbi-git\frontend-java
 mvn javafx:run
 ```
 
@@ -177,27 +240,29 @@ Invoke-RestMethod http://127.0.0.1:8000/api/system/status
 Invoke-RestMethod http://127.0.0.1:8000/api/dashboard/summary
 ```
 
-The default prepare command loads the first 32 active stocks from `data/reference/top100_stocks.csv`, all active currencies from `data/reference/currencies.csv` as USD-based FX series, BTC/ETH and the other curated crypto assets, and macro indicators including Selic. Use `--stock-limit 100` when you want the full stock reference list.
+The default live-first scope is intentionally small and reliable: USD/BRL, USD/EUR, USD/GBP, USD/JPY, USD/CAD, USD/CHF; BTC, ETH, SOL, BNB, XRP; AAPL, MSFT, NVDA, AMZN, GOOGL, META, TSLA, JPM, KO, AMD; SELIC_DAILY, CDI_DAILY, and IPCA_MONTHLY. The versioned release scope lives in `data/reference/live_release_scope.csv`.
 
-Audit the prepared data:
+Refresh recent live data after promotion:
 
 ```powershell
-python -m fx_rates dashboard audit
+python -m fx_rates dashboard refresh-live --db-path data/fx.sqlite
+python -m fx_rates dashboard refresh-live --db-path data/fx.sqlite --dry-run
 ```
 
-Expected demo readiness is at least 68 instruments, no missing latest quotes, no missing analysis snapshots, and four-year coverage for USD/BRL, USD/EUR, BTC, ETH, Selic, and the major stocks.
+`prepare-demo` remains available for automated tests and local UI experiments only.
 
 ### Como resolver dashboard sem dados
 
-If JavaFX connects to the API but the dashboard is empty, confirm that `prepare-demo` and `serve` are using the same SQLite file. Relative `DB_PATH` values from `.env`, such as `data/fx.sqlite`, are resolved from the project root; explicit `--db-path` values are honored by each command.
+If JavaFX connects to the API but the dashboard is empty, confirm that `build-live-db`, `promote-live`, and `serve` are using the expected SQLite files. Relative `DB_PATH` values from `.env`, such as `data/fx.sqlite`, are resolved from the project root; explicit `--db-path` values are honored by each command.
 
 PowerShell:
 
 ```powershell
-cd C:\Projetos_Local\rates-sqlite-powerbi
+cd C:\Projetos_Local\rates-sqlite-powerbi-git
 .\.venv\Scripts\Activate.ps1
-python -m fx_rates dashboard prepare-demo --years 4 --demo
-python -m fx_rates dashboard audit
+python -m fx_rates dashboard build-live-db --days 365 --db-path .tmp/live-main-candidate.sqlite --external-test
+python -m fx_rates dashboard audit-live --db-path .tmp/live-main-candidate.sqlite
+python -m fx_rates dashboard promote-live --candidate-db .tmp/live-main-candidate.sqlite --to-db data/fx.sqlite --backup
 python -m fx_rates serve --host 127.0.0.1 --port 8000
 ```
 
@@ -208,7 +273,7 @@ Invoke-RestMethod http://127.0.0.1:8000/api/system/status
 Invoke-RestMethod http://127.0.0.1:8000/api/dashboard/summary
 ```
 
-Check that `/api/system/status.db_path` matches the path printed by `dashboard audit`. If `is_empty` is `true`, rerun `prepare-demo`, restart the backend, and check the same endpoint again.
+Check that `/api/system/status.db_path` matches the promoted `data/fx.sqlite`. If `is_empty` is `true`, rerun the live staging flow, promote only after checks pass, restart the backend, and check the same endpoint again.
 
 ### Backfill
 
@@ -321,12 +386,12 @@ The JavaFX app is a corporate dark-mode desktop dashboard that consumes the Fast
 
 Current productized UI features:
 
-- populated summary and market overview cards after `dashboard prepare-demo`
+- populated summary and market overview cards after live DB promotion
 - dedicated cross-asset Markets, Stocks, FX & Crypto, and Macro views
 - fixed 30-day overview mini charts
 - Top 10 Companies table with financial formatting
 - Watchlist filters and selected instrument details
-- interactive charts with 30D, 90D, 6M, 1Y, and 4Y ranges
+- interactive charts with 7D, 30D, 90D, 180D, and 365D ranges
 - hover tooltip, crosshair, last-value marker, loading/empty/error states
 - Settings page showing `/api/system/status` diagnostics
 
@@ -508,7 +573,7 @@ python -m fx_rates backfill --start 2026-02-01 --end 2026-02-03 --base USD --sym
 
 - If the DSN already exists and points to the wrong file, rerun `.\scripts\setup_sqlite_odbc_dsn.ps1`.
 
-## Verified Demo Run
+## Verified Local Smoke Run
 
 Release hardening was completed with a fresh standard CPython virtual environment and the following outcomes:
 
@@ -520,7 +585,7 @@ Release hardening was completed with a fresh standard CPython virtual environmen
 - SQLite contains data in `data/fx.sqlite`, including `fx_rates`, `ingest_runs`, and the analytics views
 - `logs/app.log` was updated during the smoke run
 
-At the end of the verified demo run, the local database contained:
+At the end of the verified smoke run, the local database contained:
 
 - `fx_rates`: `8` rows
 - `ingest_runs`: `9` rows
@@ -529,17 +594,18 @@ At the end of the verified demo run, the local database contained:
 
 ### Data & Display Consistency
 
-Finance Monitor uses SQLite as the local source of truth. Demo data is deterministic/local and is designed to be visually plausible for portfolio validation, but it is synthetic and is not financial advice.
+Finance Monitor uses SQLite as the local source of truth. For product use, the database should be promoted from a validated live candidate. Demo data is deterministic/local and is limited to tests and development.
 
-Prepare and audit the dashboard before visual QA:
+Build, validate, and audit the live dashboard before visual QA:
 
 ```powershell
-python -m fx_rates dashboard prepare-demo --years 4 --demo
-python -m fx_rates dashboard audit
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run_visual_test.ps1 -PrepareDemo -SkipTests
+python -m fx_rates dashboard build-live-db --days 365 --db-path .tmp/live-main-candidate.sqlite --external-test
+python -m fx_rates dashboard validate-samples --db-path .tmp/live-main-candidate.sqlite --samples-per-symbol 5 --external-test
+python -m fx_rates dashboard audit-live --db-path .tmp/live-main-candidate.sqlite
+python -m fx_rates api smoke-live --db-path .tmp/live-main-candidate.sqlite --port 8001
 ```
 
-The audit checks quote/history ratios, suspicious stock prices, non-positive FX/crypto values, missing macro units, duplicate instruments/quotes, and expected 4-year coverage. Dashboard API responses include display metadata such as `display_pair`, `display_unit`, `value_format`, `chart_title`, `axis_label`, and `tooltip_label` so charts can explicitly show USD, FX pair direction, crypto quote currency, and macro units.
+The audit checks quote/history ratios, suspicious stock prices, non-positive FX/crypto values, missing macro units, duplicate instruments/quotes, and expected 365-day coverage. Dashboard API responses include display metadata such as `display_pair`, `display_unit`, `value_format`, `chart_title`, `axis_label`, and `tooltip_label` so charts can explicitly show USD, FX pair direction, crypto quote currency, and macro units.
 
 ### Timeout or connectivity issues
 
@@ -567,12 +633,16 @@ This means `--replace-demo` never deletes demo/local rows before the live fetch 
 Useful commands:
 
 ```powershell
-python -m fx_rates providers status
 python -m fx_rates providers status --external-test
-python -m fx_rates dashboard prepare-live --years 4 --asset-type STOCK --symbols AAPL,MSFT,NVDA --replace-demo
-python -m fx_rates dashboard prepare-demo --years 4 --demo --symbols AAPL,MSFT,NVDA
+python -m fx_rates dashboard prepare-live --years 1 --asset-type STOCK --symbols AAPL,MSFT,NVDA --db-path .tmp/live-stock-test.sqlite
+python -m fx_rates dashboard audit --db-path .tmp/live-stock-test.sqlite
+python -m fx_rates dashboard audit-market --db-path .tmp/live-stock-test.sqlite
+python -m fx_rates dashboard prepare-live --years 1 --asset-type STOCK --symbols AAPL,MSFT,NVDA --replace-demo
+python -m fx_rates dashboard audit
 python -m fx_rates dashboard audit-market
 ```
+
+Use only environment variables for provider credentials: `TWELVE_DATA_API_KEY`, `COINGECKO_DEMO_API_KEY`, `COINGECKO_PRO_API_KEY`, and any future provider key. Do not place API keys in source files, docs, `.env` committed to Git, logs, reports, or command output.
 
 Do not commit `data/*.sqlite`; SQLite files are runtime state, not source code.
 

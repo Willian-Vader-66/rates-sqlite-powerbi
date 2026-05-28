@@ -6,6 +6,7 @@ from pathlib import Path
 
 from dotenv import find_dotenv, load_dotenv
 
+from .live_history import normalize_history_mode
 from .utils import ensure_dir, ensure_parent_dir, parse_bool, validate_log_level
 
 
@@ -34,10 +35,20 @@ class Settings:
     crypto_api_key: str = ""
     macro_api_key: str = ""
     fred_api_key: str = ""
+    coingecko_demo_api_key: str = ""
+    coingecko_pro_api_key: str = ""
+    coingecko_api_plan: str = "public"
     fx_provider: str = "frankfurter"
     crypto_provider: str = "coingecko"
     stock_provider: str = "twelvedata"
     macro_provider: str = "bcb_sgs"
+    live_quote_warn_pct: float = 1.0
+    live_quote_fail_pct: float = 5.0
+    live_quote_stale_days: int = 10
+    live_default_days: int = 365
+    live_max_free_days: int = 365
+    live_history_mode: str = "standard"
+    live_advanced_max_years: int = 10
 
 
 DEFAULTS = Settings(
@@ -117,10 +128,23 @@ def load_settings(args: object | None = None) -> Settings:
         crypto_api_key=os.getenv("CRYPTO_API_KEY", DEFAULTS.crypto_api_key),
         macro_api_key=os.getenv("MACRO_API_KEY", DEFAULTS.macro_api_key),
         fred_api_key=os.getenv("FRED_API_KEY", DEFAULTS.fred_api_key),
+        coingecko_demo_api_key=os.getenv(
+            "COINGECKO_DEMO_API_KEY",
+            os.getenv("CRYPTO_API_KEY", DEFAULTS.coingecko_demo_api_key),
+        ),
+        coingecko_pro_api_key=os.getenv("COINGECKO_PRO_API_KEY", DEFAULTS.coingecko_pro_api_key),
+        coingecko_api_plan=os.getenv("COINGECKO_API_PLAN", DEFAULTS.coingecko_api_plan).strip().lower(),
         fx_provider=os.getenv("FX_PROVIDER", DEFAULTS.fx_provider).strip().lower(),
         crypto_provider=os.getenv("CRYPTO_PROVIDER", DEFAULTS.crypto_provider).strip().lower(),
         stock_provider=os.getenv("STOCK_PROVIDER", os.getenv("MARKET_DATA_PROVIDER", DEFAULTS.stock_provider)).strip().lower(),
         macro_provider=os.getenv("MACRO_PROVIDER", DEFAULTS.macro_provider).strip().lower(),
+        live_quote_warn_pct=float(os.getenv("LIVE_QUOTE_WARN_PCT", str(DEFAULTS.live_quote_warn_pct))),
+        live_quote_fail_pct=float(os.getenv("LIVE_QUOTE_FAIL_PCT", str(DEFAULTS.live_quote_fail_pct))),
+        live_quote_stale_days=int(os.getenv("LIVE_QUOTE_STALE_DAYS", str(DEFAULTS.live_quote_stale_days))),
+        live_default_days=int(os.getenv("LIVE_DEFAULT_DAYS", str(DEFAULTS.live_default_days))),
+        live_max_free_days=int(os.getenv("LIVE_MAX_FREE_DAYS", str(DEFAULTS.live_max_free_days))),
+        live_history_mode=normalize_history_mode(os.getenv("LIVE_HISTORY_MODE", DEFAULTS.live_history_mode)),
+        live_advanced_max_years=int(os.getenv("LIVE_ADVANCED_MAX_YEARS", str(DEFAULTS.live_advanced_max_years))),
         market_data_provider=os.getenv("MARKET_DATA_PROVIDER", DEFAULTS.market_data_provider).strip().lower(),
         market_data_demo_mode=parse_bool(
             os.getenv("MARKET_DATA_DEMO_MODE", str(DEFAULTS.market_data_demo_mode)),
@@ -148,12 +172,26 @@ def validate_settings(settings: Settings) -> None:
         raise ValueError("FX_PROVIDER invalido: use frankfurter, fake_live ou none")
     if settings.crypto_provider not in {"coingecko", "fake_live", "none", "disabled", "off"}:
         raise ValueError("CRYPTO_PROVIDER invalido: use coingecko, fake_live ou none")
+    if settings.coingecko_api_plan not in {"public", "demo", "pro"}:
+        raise ValueError("COINGECKO_API_PLAN invalido: use public, demo ou pro")
     if settings.stock_provider not in {"twelvedata", "fake_live", "none", "disabled", "off"}:
         raise ValueError("STOCK_PROVIDER invalido: use twelvedata, fake_live ou none")
     if settings.macro_provider not in {"bcb_sgs", "fred", "fake_live", "none", "disabled", "off"}:
         raise ValueError("MACRO_PROVIDER invalido: use bcb_sgs, fred, fake_live ou none")
     if settings.api_port <= 0 or settings.api_port > 65535:
         raise ValueError("API_PORT invalida")
+    if settings.live_quote_warn_pct < 0:
+        raise ValueError("LIVE_QUOTE_WARN_PCT deve ser zero ou maior")
+    if settings.live_quote_fail_pct <= settings.live_quote_warn_pct:
+        raise ValueError("LIVE_QUOTE_FAIL_PCT deve ser maior que LIVE_QUOTE_WARN_PCT")
+    if settings.live_quote_stale_days <= 0:
+        raise ValueError("LIVE_QUOTE_STALE_DAYS deve ser maior que zero")
+    if settings.live_default_days <= 0:
+        raise ValueError("LIVE_DEFAULT_DAYS deve ser maior que zero")
+    if settings.live_max_free_days <= 0:
+        raise ValueError("LIVE_MAX_FREE_DAYS deve ser maior que zero")
+    if settings.live_advanced_max_years <= 0:
+        raise ValueError("LIVE_ADVANCED_MAX_YEARS deve ser maior que zero")
 
 
 def ensure_runtime_dirs(settings: Settings) -> None:

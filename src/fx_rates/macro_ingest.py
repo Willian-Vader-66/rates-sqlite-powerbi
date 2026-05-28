@@ -107,6 +107,10 @@ def _upsert_macro_instruments(settings: Settings, indicators: list[MacroIndicato
             priority=indicator.priority,
             created_at=now,
             updated_at=now,
+            display_name=indicator.indicator_name,
+            unit_label=indicator.unit,
+            value_label="Monthly Inflation" if indicator.indicator_code == "IPCA_MONTHLY" else "Daily Rate" if indicator.indicator_code.endswith("_DAILY") else "Macro Value",
+            expected_frequency="monthly" if indicator.indicator_code.endswith("_MONTHLY") else "business_daily",
         )
         for indicator in indicators
     ]

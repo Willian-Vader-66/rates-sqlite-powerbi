@@ -5,12 +5,15 @@ from pathlib import Path
 import pytest
 
 from fx_rates.config import DEFAULTS
+from fx_rates.dashboard_audit import audit_dashboard
 from fx_rates.dashboard_market_audit import audit_market
 from fx_rates.dashboard_prepare import run_prepare_demo_dashboard, run_prepare_live_dashboard
 from fx_rates.db_sqlite import (
     commit_prepared_live_dataset,
     get_data_health,
     get_data_mode_summary,
+    get_latest_quotes,
+    get_stock_history,
     get_system_status,
     initialize_schema,
     upsert_instruments,
@@ -18,6 +21,7 @@ from fx_rates.db_sqlite import (
     upsert_stock_prices_daily,
 )
 from fx_rates.models import InstrumentRow, MarketQuoteRow, StockPriceDailyRow
+from fx_rates.market_providers import RateLimiter, TwelveDataProvider
 from fx_rates.provider_status import providers_status
 from fx_rates.cli import main
 
@@ -196,6 +200,8 @@ def test_prepare_live_mixed_requires_explicit_flag(tmp_path: Path) -> None:
     assert blocked == 3
     assert allowed == 0
     assert get_system_status(db_path)["data_mode"] == "mixed"
+    assert _stock_history_count(db_path, "AAPL", "demo") == 0
+    assert _stock_history_count(db_path, "AAPL", "live") > 0
 
 
 def test_prepare_live_replace_demo_replaces_selected_demo_rows(tmp_path: Path) -> None:
@@ -344,7 +350,181 @@ def test_audit_market_reports_important_symbol_without_history(tmp_path: Path) -
     assert health["status"] == "FAIL"
     assert "STOCK:AAPL" in health["missing_important_symbols"]
     assert "NO_HISTORY" in item["flags"]
-    assert "prepare-demo --years 4 --demo --symbols AAPL,MSFT,NVDA" in health["repair_command"]
+    assert "build-live-db --days 365" in health["repair_command"]
+    assert ".tmp/live-main-candidate.sqlite" in health["repair_command"]
+
+
+
+class _JsonResponse:
+    status_code = 200
+    headers: dict[str, str] = {}
+
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._payload
+
+
+class _ReverseChronologicalSession:
+    def get(self, _url, params, timeout):
+        return _JsonResponse(
+            {
+                "meta": {"currency": "USD", "exchange": "NASDAQ"},
+                "values": [
+                    {"datetime": "2026-01-03", "open": "30", "high": "31", "low": "29", "close": "30", "volume": "300"},
+                    {"datetime": "2026-01-02", "open": "20", "high": "21", "low": "19", "close": "20", "volume": "200"},
+                    {"datetime": "2026-01-01", "open": "10", "high": "11", "low": "9", "close": "10", "volume": "100"},
+                ],
+            }
+        )
+
+
+def test_twelve_data_history_is_normalized_to_chronological_order() -> None:
+    provider = TwelveDataProvider(
+        api_key="valid-looking-key-12345",
+        max_retries=0,
+        rate_limiter=RateLimiter(0),
+        session=_ReverseChronologicalSession(),
+    )
+
+    rows = provider.fetch_stock_daily("AAPL", "2026-01-01", "2026-01-03")
+
+    assert [row.date for row in rows] == ["2026-01-01", "2026-01-02", "2026-01-03"]
+    assert rows[-1].close == 30.0
+
+
+def test_prepare_live_allow_mixed_replaces_symbol_demo_after_valid_staging(monkeypatch, tmp_path: Path) -> None:
+    db_path = str(tmp_path / "mixed-symbol-safe.sqlite")
+    demo_settings = _demo_settings(db_path, tmp_path)
+    live_settings = _twelvedata_settings(db_path, tmp_path, api_key="valid-looking-key-12345")
+    initialize_schema(db_path)
+    assert run_prepare_demo_dashboard(demo_settings, years=1, demo=True, symbols=["AAPL"], stock_limit=1) == 0
+
+    class ReverseProvider:
+        name = "twelvedata"
+
+        def fetch_stock_daily(self, **_kwargs):
+            return [
+                _stock_row("AAPL", "twelvedata", data_mode="unknown").__class__(
+                    date="2026-01-03", symbol="AAPL", exchange="NASDAQ", open=30, high=31, low=29, close=30, adjusted_close=30, volume=300, currency="USD", provider="twelvedata", fetched_at="2026-01-03T00:00:00Z"
+                ),
+                _stock_row("AAPL", "twelvedata", data_mode="unknown").__class__(
+                    date="2026-01-02", symbol="AAPL", exchange="NASDAQ", open=20, high=21, low=19, close=20, adjusted_close=20, volume=200, currency="USD", provider="twelvedata", fetched_at="2026-01-03T00:00:00Z"
+                ),
+                _stock_row("AAPL", "twelvedata", data_mode="unknown").__class__(
+                    date="2026-01-01", symbol="AAPL", exchange="NASDAQ", open=10, high=11, low=9, close=10, adjusted_close=10, volume=100, currency="USD", provider="twelvedata", fetched_at="2026-01-03T00:00:00Z"
+                ),
+            ]
+
+    monkeypatch.setattr("fx_rates.dashboard_prepare.build_market_provider", lambda **_kwargs: ReverseProvider())
+    code = run_prepare_live_dashboard(live_settings, years=1, asset_type="STOCK", symbols=["AAPL"], stock_limit=1, allow_mixed=True)
+
+    assert code == 0
+    assert _stock_history_count(db_path, "AAPL", "demo") == 0
+    assert _stock_history_count(db_path, "AAPL", "live") == 3
+    import sqlite3
+
+    with sqlite3.connect(db_path) as conn:
+        quote = conn.execute("SELECT price, quote_time, data_mode, provider FROM market_quotes_latest WHERE asset_type='STOCK' AND symbol='AAPL'").fetchone()
+        analysis = conn.execute("SELECT last_price, data_mode FROM analysis_snapshots WHERE asset_type='STOCK' AND symbol='AAPL' ORDER BY snapshot_id DESC LIMIT 1").fetchone()
+    assert quote == (30.0, "2026-01-03", "live", "twelvedata")
+    assert analysis == (30.0, "live")
+
+
+def test_prepare_live_staged_quote_history_divergence_aborts_before_delete(monkeypatch, tmp_path: Path) -> None:
+    db_path = str(tmp_path / "divergence-abort.sqlite")
+    demo_settings = _demo_settings(db_path, tmp_path)
+    live_settings = _twelvedata_settings(db_path, tmp_path, api_key="valid-looking-key-12345")
+    initialize_schema(db_path)
+    assert run_prepare_demo_dashboard(demo_settings, years=1, demo=True, symbols=["AAPL"], stock_limit=1) == 0
+    before = _stock_history_count(db_path, "AAPL", "demo")
+
+    class GoodProvider:
+        name = "twelvedata"
+
+        def fetch_stock_daily(self, **_kwargs):
+            return [
+                _stock_row("AAPL", "twelvedata", data_mode="unknown").__class__(
+                    date="2026-01-01", symbol="AAPL", exchange="NASDAQ", open=10, high=11, low=9, close=10, adjusted_close=10, volume=100, currency="USD", provider="twelvedata", fetched_at="2026-01-03T00:00:00Z"
+                ),
+                _stock_row("AAPL", "twelvedata", data_mode="unknown").__class__(
+                    date="2026-01-02", symbol="AAPL", exchange="NASDAQ", open=20, high=21, low=19, close=20, adjusted_close=20, volume=200, currency="USD", provider="twelvedata", fetched_at="2026-01-03T00:00:00Z"
+                ),
+            ]
+
+    def bad_quote(symbol, exchange, history):
+        return MarketQuoteRow(symbol=symbol, asset_type="STOCK", exchange=exchange, price=1000.0, bid=None, ask=None, open=None, high=None, low=None, previous_close=None, change=None, percent_change=None, volume=None, quote_time="2026-01-02", provider="twelvedata", fetched_at="2026-01-03T00:00:00Z", data_mode="live")
+
+    monkeypatch.setattr("fx_rates.dashboard_prepare.build_market_provider", lambda **_kwargs: GoodProvider())
+    monkeypatch.setattr("fx_rates.dashboard_prepare._stock_quote_from_history", bad_quote)
+    code = run_prepare_live_dashboard(live_settings, years=1, asset_type="STOCK", symbols=["AAPL"], stock_limit=1, allow_mixed=True)
+
+    assert code == 4
+    assert _stock_history_count(db_path, "AAPL", "demo") == before
+    assert _stock_history_count(db_path, "AAPL", "live") == 0
+
+
+
+def test_audits_detect_quote_history_divergence(tmp_path: Path) -> None:
+    db_path = _db(tmp_path)
+    upsert_instruments(db_path, [_instrument("AAPL", "twelvedata", data_mode="live")])
+    upsert_stock_prices_daily(
+        db_path,
+        [
+            StockPriceDailyRow("2026-01-01", "AAPL", "NASDAQ", 100, 101, 99, 100, 100, 1000, "USD", "twelvedata", "2026-01-02T00:00:00Z", data_mode="live"),
+            StockPriceDailyRow("2026-01-02", "AAPL", "NASDAQ", 110, 111, 109, 110, 110, 1100, "USD", "twelvedata", "2026-01-02T00:00:00Z", data_mode="live"),
+        ],
+    )
+    upsert_market_quotes_latest(
+        db_path,
+        [
+            MarketQuoteRow("AAPL", "STOCK", "NASDAQ", 1000.0, None, None, None, None, None, None, None, None, None, "2026-01-01", "twelvedata", "2026-01-02T00:00:00Z", data_mode="live"),
+        ],
+    )
+
+    market = audit_market(db_path)
+    dashboard = audit_dashboard(db_path, expected_years=0)
+    item = next(row for row in market["items"] if row["symbol"] == "AAPL")
+
+    assert "QUOTE_HISTORY_DIVERGENCE_FAIL" in item["flags"]
+    assert "QUOTE_OLDER_THAN_HISTORY" in item["flags"]
+    assert "STALE_DATA" in item["flags"]
+    dashboard_item = next(row for row in dashboard["quote_consistency"] if row["symbol"] == "AAPL")
+    assert dashboard_item["status"] == "FAIL"
+    assert "QUOTE_HISTORY_DIVERGENCE_FAIL" in dashboard_item["flags"]
+    assert "QUOTE_OLDER_THAN_HISTORY" in dashboard_item["flags"]
+
+
+def test_history_and_latest_quote_prefer_live_source_when_symbol_has_demo_and_live(tmp_path: Path) -> None:
+    db_path = _db(tmp_path)
+    upsert_instruments(db_path, [_instrument("AAPL", "mock", data_mode="demo"), _instrument("AAPL", "twelvedata", data_mode="live")])
+    upsert_stock_prices_daily(
+        db_path,
+        [
+            StockPriceDailyRow("2026-01-01", "AAPL", "NASDAQ", 10, 11, 9, 10, 10, 100, "USD", "mock", "2026-01-03T00:00:00Z", data_mode="demo"),
+            StockPriceDailyRow("2026-01-02", "AAPL", "NASDAQ", 20, 21, 19, 20, 20, 200, "USD", "twelvedata", "2026-01-03T00:00:00Z", data_mode="live"),
+            StockPriceDailyRow("2026-01-03", "AAPL", "NASDAQ", 30, 31, 29, 30, 30, 300, "USD", "twelvedata", "2026-01-03T00:00:00Z", data_mode="live"),
+        ],
+    )
+    upsert_market_quotes_latest(
+        db_path,
+        [
+            MarketQuoteRow("AAPL", "STOCK", "NASDAQ", 10.0, None, None, None, None, None, None, None, None, None, "2026-01-01", "mock", "2026-01-04T00:00:00Z", data_mode="demo"),
+            MarketQuoteRow("AAPL", "STOCK", "NASDAQ", 30.0, None, None, None, None, None, None, None, None, None, "2026-01-03", "twelvedata", "2026-01-03T00:00:00Z", data_mode="live"),
+        ],
+    )
+
+    history = get_stock_history(db_path, "AAPL")
+    quotes = get_latest_quotes(db_path, symbols=["AAPL"], asset_type="STOCK")
+
+    assert [row["data_mode"] for row in history] == ["live", "live"]
+    assert history[-1]["close"] == 30
+    assert quotes[0]["data_mode"] == "live"
+    assert quotes[0]["price"] == 30
 
 
 def _demo_settings(db_path: str, tmp_path: Path):

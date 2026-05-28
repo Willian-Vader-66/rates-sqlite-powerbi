@@ -88,7 +88,7 @@ Note: pytest was rerun with a repo-local ignored temp folder because `C:\Users\W
 Prepare demo command:
 
 ```powershell
-.\.venv\Scripts\python.exe -m fx_rates dashboard prepare-demo --years 4 --demo
+.\.venv\Scripts\python.exe -m fx_rates dashboard prepare-demo --years 1 --demo
 ```
 
 Result:

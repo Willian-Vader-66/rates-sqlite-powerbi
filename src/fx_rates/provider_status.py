@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from .config import Settings
+from .redaction import redact_text
 
 
 INVALID_KEY_MARKERS = {
@@ -84,7 +85,14 @@ def normalize_symbol(symbol: str) -> str:
 def providers_status(settings: Settings, *, test_external: bool = False) -> dict[str, Any]:
     statuses = [
         _provider_status("FX", settings.fx_provider, requires_key=False, key_name=None, api_key=settings.fx_api_key, supported_symbols=_fx_symbols()),
-        _provider_status("CRYPTO", settings.crypto_provider, requires_key=False, key_name=None, api_key=settings.crypto_api_key, supported_symbols=_crypto_symbols()),
+        _provider_status(
+            "CRYPTO",
+            settings.crypto_provider,
+            requires_key=settings.crypto_provider == "coingecko" and settings.coingecko_api_plan == "pro",
+            key_name="COINGECKO_PRO_API_KEY" if settings.coingecko_api_plan == "pro" else None,
+            api_key=settings.coingecko_pro_api_key if settings.coingecko_api_plan == "pro" else settings.coingecko_demo_api_key,
+            supported_symbols=_crypto_symbols(),
+        ),
         _provider_status("STOCK", settings.stock_provider, requires_key=settings.stock_provider != "fake_live", key_name="TWELVE_DATA_API_KEY", api_key=settings.twelve_data_api_key, supported_symbols=_stock_symbols()),
         _provider_status("MACRO", settings.macro_provider, requires_key=settings.macro_provider == "fred", key_name="FRED_API_KEY", api_key=settings.fred_api_key, supported_symbols=_macro_symbols(settings.macro_provider)),
     ]
@@ -95,6 +103,8 @@ def providers_status(settings: Settings, *, test_external: bool = False) -> dict
         "providers": [status.as_dict() for status in statuses],
         "api_keys": {
             "TWELVE_DATA_API_KEY": key_status(settings.twelve_data_api_key),
+            "COINGECKO_DEMO_API_KEY": key_status(settings.coingecko_demo_api_key),
+            "COINGECKO_PRO_API_KEY": key_status(settings.coingecko_pro_api_key),
             "FRED_API_KEY": key_status(settings.fred_api_key),
         },
         "external_test": "requested" if test_external else "skipped",
@@ -214,7 +224,14 @@ def _with_external_test(status: ProviderStatus, settings: Settings) -> ProviderS
             from .crypto_providers import build_crypto_provider, load_crypto_reference
 
             asset = next(item for item in load_crypto_reference("data/reference/crypto_assets.csv") if item.symbol == "BTC")
-            quote = build_crypto_provider(False, min(settings.timeout_seconds, 10), 0).fetch_quote(asset)
+            quote = build_crypto_provider(
+                False,
+                min(settings.timeout_seconds, 10),
+                0,
+                coingecko_api_plan=settings.coingecko_api_plan,
+                coingecko_demo_api_key=settings.coingecko_demo_api_key,
+                coingecko_pro_api_key=settings.coingecko_pro_api_key,
+            ).fetch_quote(asset)
             if quote.price is None or quote.price <= 0:
                 raise ValueError("invalid crypto payload")
         elif status.asset_type == "MACRO":
@@ -238,14 +255,40 @@ def _with_external_test(status: ProviderStatus, settings: Settings) -> ProviderS
                 raise ValueError("empty FX payload")
         return ProviderStatus(**{**status.as_dict(), "external_test": "pass", "available": True, "message": status.message})
     except Exception as exc:
-        return ProviderStatus(**{**status.as_dict(), "external_test": "fail", "available": False, "message": f"external test failed: {exc}"})
+        return ProviderStatus(**{**status.as_dict(), "external_test": "fail", "available": False, "message": _external_error_message(exc)})
+
+
+def _external_error_message(exc: Exception) -> str:
+    from .env_doctor import classify_external_error
+
+    classified = classify_external_error(exc)
+    message = redact_text(str(exc).strip() or exc.__class__.__name__)
+    lowered = message.lower()
+    if classified.error_type == "SSL_ERROR":
+        return (
+            "external test failed: SSL_ERROR: TLS/CA validation failed. "
+            "Recommendations: python -m pip install --upgrade certifi truststore; "
+            "set SSL_CERT_FILE/REQUESTS_CA_BUNDLE to certifi.where(); "
+            'optional on Windows: $env:FX_RATES_USE_TRUSTSTORE="1".'
+        )
+    if classified.error_type in {"DNS_ERROR", "TIMEOUT", "HTTP_ERROR", "UNKNOWN"}:
+        return f"external test failed: {classified.error_type}: {classified.message}"
+    if "rate" in lowered and "limit" in lowered:
+        return f"external test failed: RATE_LIMIT: {message}"
+    if "unauthorized" in lowered or "apikey" in lowered or "api key" in lowered or "invalid key" in lowered:
+        return f"external test failed: AUTH_ERROR: {message}"
+    return f"external test failed: {message}"
 
 
 def _recommendation(missing: list[ProviderStatus]) -> str:
     if not missing:
-        return "Providers are configured. Next: python -m fx_rates dashboard prepare-live --years 4"
+        return "Providers are configured. Next: python -m fx_rates dashboard build-live-db --days 365 --db-path .tmp/live-main-candidate.sqlite --external-test"
     assets = ", ".join(status.asset_type for status in missing)
-    return f"Configure providers/API keys for: {assets}. Demo remains available with dashboard prepare-demo --years 4 --demo."
+    return (
+        f"Configure providers/API keys for: {assets}. "
+        "Live-first staging command: python -m fx_rates dashboard build-live-db --days 365 "
+        "--db-path .tmp/live-main-candidate.sqlite --external-test."
+    )
 
 
 def _fx_symbols() -> list[str]:

@@ -1,0 +1,25 @@
+asset_type,symbol,display_name,provider_symbol,currency,unit_label,value_label,expected_frequency,required,min_rows_365
+FX,BRL,US Dollar / Brazilian Real,BRL,BRL,BRL per 1 USD,Exchange Rate,business_daily,1,250
+FX,EUR,US Dollar / Euro,EUR,EUR,EUR per 1 USD,Exchange Rate,business_daily,1,250
+FX,GBP,US Dollar / Pound Sterling,GBP,GBP,GBP per 1 USD,Exchange Rate,business_daily,1,250
+FX,JPY,US Dollar / Japanese Yen,JPY,JPY,JPY per 1 USD,Exchange Rate,business_daily,1,250
+FX,CAD,US Dollar / Canadian Dollar,CAD,CAD,CAD per 1 USD,Exchange Rate,business_daily,1,250
+FX,CHF,US Dollar / Swiss Franc,CHF,CHF,CHF per 1 USD,Exchange Rate,business_daily,1,250
+CRYPTO,BTC,Bitcoin,bitcoin,USD,USD,Crypto Price,daily,1,330
+CRYPTO,ETH,Ethereum,ethereum,USD,USD,Crypto Price,daily,1,330
+CRYPTO,BNB,BNB,binancecoin,USD,USD,Crypto Price,daily,1,330
+CRYPTO,SOL,Solana,solana,USD,USD,Crypto Price,daily,1,330
+CRYPTO,XRP,XRP,ripple,USD,USD,Crypto Price,daily,1,330
+STOCK,AAPL,Apple Inc,AAPL,USD,USD,Stock Price,business_daily,1,220
+STOCK,MSFT,Microsoft Corp,MSFT,USD,USD,Stock Price,business_daily,1,220
+STOCK,NVDA,NVIDIA Corp,NVDA,USD,USD,Stock Price,business_daily,1,220
+STOCK,AMZN,Amazon.com Inc,AMZN,USD,USD,Stock Price,business_daily,1,220
+STOCK,GOOGL,Alphabet Inc,GOOGL,USD,USD,Stock Price,business_daily,1,220
+STOCK,META,Meta Platforms Inc,META,USD,USD,Stock Price,business_daily,1,220
+STOCK,TSLA,Tesla Inc,TSLA,USD,USD,Stock Price,business_daily,1,220
+STOCK,JPM,JPMorgan Chase & Co,JPM,USD,USD,Stock Price,business_daily,1,220
+STOCK,KO,Coca-Cola Co,KO,USD,USD,Stock Price,business_daily,1,220
+STOCK,AMD,Advanced Micro Devices Inc,AMD,USD,USD,Stock Price,business_daily,1,220
+MACRO,SELIC_DAILY,Selic Daily Rate,11,,% a.d.,Daily Rate,business_daily,1,220
+MACRO,CDI_DAILY,CDI Daily Rate,12,,% a.d.,Daily Rate,business_daily,1,220
+MACRO,IPCA_MONTHLY,IPCA Monthly Inflation,433,,% a.m.,Monthly Inflation,monthly,1,10

@@ -18,6 +18,11 @@ def test_parser_accepts_commands_and_new_flags() -> None:
     assert status_args.log_file == "logs/custom.log"
     assert status_args.retries == 2
 
+    env_args = parser.parse_args(["env", "doctor", "--timeout", "3"])
+    assert env_args.command == "env"
+    assert env_args.env_command == "doctor"
+    assert env_args.timeout == 3
+
     daily_args = parser.parse_args(
         ["daily", "--base", "usd", "--symbols", "eur, BRL", "--use-cache-latest", "--retries", "4"]
     )
@@ -50,19 +55,49 @@ def test_parser_accepts_commands_and_new_flags() -> None:
     assert quote_args.command == "quotes"
     assert quote_args.symbols == ["AAPL", "MSFT"]
 
-    dashboard_args = parser.parse_args(["dashboard", "prepare-demo", "--years", "4", "--demo"])
+    crypto_test_args = parser.parse_args(["crypto", "test-history", "--symbols", "BTC,ETH", "--days", "365"])
+    assert crypto_test_args.command == "crypto"
+    assert crypto_test_args.crypto_command == "test-history"
+    assert crypto_test_args.symbols == ["BTC", "ETH"]
+    assert crypto_test_args.days == 365
+
+    dashboard_args = parser.parse_args(["dashboard", "prepare-demo", "--days", "365", "--demo"])
     assert dashboard_args.command == "dashboard"
     assert dashboard_args.dashboard_command == "prepare-demo"
-    assert dashboard_args.years == 4
+    assert dashboard_args.days == 365
     assert dashboard_args.demo is True
 
-    audit_args = parser.parse_args(["dashboard", "audit", "--expected-years", "4"])
+    audit_args = parser.parse_args(["dashboard", "audit", "--expected-years", "1"])
     assert audit_args.dashboard_command == "audit"
 
     market_audit_args = parser.parse_args(["dashboard", "audit-market", "--with-live-sample"])
     assert market_audit_args.dashboard_command == "audit-market"
     assert market_audit_args.with_live_sample is True
-    assert audit_args.expected_years == 4
+    assert audit_args.expected_years == 1
+
+    build_live_args = parser.parse_args(["dashboard", "build-live-db", "--days", "365", "--db-path", ".tmp/live-main-candidate.sqlite", "--external-test", "--allow-partial"])
+    assert build_live_args.dashboard_command == "build-live-db"
+    assert build_live_args.days == 365
+    assert build_live_args.external_test is True
+    assert build_live_args.allow_partial is True
+
+    refresh_live_args = parser.parse_args(["dashboard", "refresh-live", "--dry-run", "--asset-type", "STOCK", "--symbols", "AAPL,MSFT"])
+    assert refresh_live_args.dashboard_command == "refresh-live"
+    assert refresh_live_args.dry_run is True
+    assert refresh_live_args.symbols == ["AAPL", "MSFT"]
+
+    validate_samples_args = parser.parse_args(["dashboard", "validate-samples", "--samples-per-symbol", "5"])
+    assert validate_samples_args.dashboard_command == "validate-samples"
+    assert validate_samples_args.samples_per_symbol == 5
+
+    audit_live_args = parser.parse_args(["dashboard", "audit-live", "--expected-days", "365"])
+    assert audit_live_args.dashboard_command == "audit-live"
+    assert audit_live_args.expected_days == 365
+
+    promote_live_args = parser.parse_args(["dashboard", "promote-live", "--candidate-db", ".tmp/live-main-candidate.sqlite", "--dry-run"])
+    assert promote_live_args.dashboard_command == "promote-live"
+    assert promote_live_args.candidate_db == ".tmp/live-main-candidate.sqlite"
+    assert promote_live_args.dry_run is True
 
 
 @patch("fx_rates.cli.run_status", return_value=0)

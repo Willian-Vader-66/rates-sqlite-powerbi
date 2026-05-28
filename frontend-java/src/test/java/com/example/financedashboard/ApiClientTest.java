@@ -92,7 +92,7 @@ class ApiClientTest {
                       "value_format": "fx_rate",
                       "chart_title": "USD/EUR Exchange Rate",
                       "points": [],
-                      "message": "No data loaded. Run: python -m fx_rates dashboard prepare-demo --years 4 --demo"
+                      "message": "No live data loaded. Run: python -m fx_rates dashboard build-live-db --days 365 --db-path .tmp/live-main-candidate.sqlite --external-test --allow-partial"
                     }
                   ],
                   "crypto": [],
@@ -105,7 +105,8 @@ class ApiClientTest {
         assertEquals("usd_eur_30d", fixedCharts.fx().get(0).id());
         assertEquals("USD/EUR", fixedCharts.fx().get(0).displayPair());
         assertEquals("fx_rate", fixedCharts.fx().get(0).valueFormat());
-        assertTrue(fixedCharts.fx().get(0).message().startsWith("No data loaded."));
+        assertTrue(fixedCharts.fx().get(0).message().startsWith("No live data loaded."));
+        assertTrue(fixedCharts.fx().get(0).message().contains("build-live-db"));
     }
 
     @Test

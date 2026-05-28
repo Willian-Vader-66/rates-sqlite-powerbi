@@ -75,7 +75,7 @@ Do not commit SQLite databases or SQLite sidecar files.
 Demo data preparation:
 
 ```powershell
-.\.venv\Scripts\python.exe -m fx_rates dashboard prepare-demo --years 4 --demo
+.\.venv\Scripts\python.exe -m fx_rates dashboard prepare-demo --years 1 --demo
 .\.venv\Scripts\python.exe -m fx_rates dashboard audit
 ```
 
@@ -83,7 +83,7 @@ The audit should show:
 
 - Total instruments greater than 0.
 - Historical rows greater than 0.
-- Date range of approximately 4 years.
+- Date range of approximately 365 days in standard live mode.
 - Latest quotes greater than 0.
 - Analysis snapshots greater than 0.
 - Duplicate instruments equal to 0.

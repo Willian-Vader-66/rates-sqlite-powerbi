@@ -13,9 +13,9 @@ The API never promotes demo data to live. Rows expose `data_mode`, `is_demo`, `i
 
 Operational rule:
 
-- Use `python -m fx_rates dashboard prepare-demo --years 4 --demo` for offline/demo datasets.
+- Use `python -m fx_rates dashboard prepare-demo --years 1 --demo` for offline/demo datasets.
 - Use `python -m fx_rates providers status` before attempting live ingestion.
-- Use `python -m fx_rates dashboard prepare-live --years 4` only after providers are configured; it now fetches live history for supported providers and records `data_mode=live`.
+- Use `python -m fx_rates dashboard prepare-live --days 365` only after providers are configured; it now fetches live history for supported providers and records `data_mode=live`.
 - Use `--allow-mixed` only when a mixed dataset is intentional.
 - Use `--replace-demo` only when live replacement is intentionally implemented and reviewed.
 
@@ -34,6 +34,6 @@ Safety guarantees:
 Recovery command for the common stock subset:
 
 ```powershell
-python -m fx_rates dashboard prepare-demo --years 4 --demo --symbols AAPL,MSFT,NVDA
+python -m fx_rates dashboard prepare-demo --years 1 --demo --symbols AAPL,MSFT,NVDA
 ```
 

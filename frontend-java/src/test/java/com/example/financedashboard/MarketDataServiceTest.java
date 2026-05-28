@@ -17,10 +17,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class MarketDataServiceTest {
     @Test
-    void fourYearRangeCalculatesStartDate() {
+    void standardLiveRangesCalculateStartDate() {
+        assertEquals(LocalDate.of(2026, 4, 26), HistoryRange.SEVEN_D.startDate(LocalDate.of(2026, 5, 3)));
         assertEquals(LocalDate.of(2026, 2, 2), HistoryRange.NINETY_D.startDate(LocalDate.of(2026, 5, 3)));
-        assertEquals(LocalDate.of(2025, 11, 3), HistoryRange.SIX_M.startDate(LocalDate.of(2026, 5, 3)));
-        assertEquals(LocalDate.of(2022, 5, 3), HistoryRange.FOUR_Y.startDate(LocalDate.of(2026, 5, 3)));
+        assertEquals(LocalDate.of(2025, 11, 4), HistoryRange.ONE_EIGHTY_D.startDate(LocalDate.of(2026, 5, 3)));
+        assertEquals(LocalDate.of(2025, 5, 3), HistoryRange.ONE_Y.startDate(LocalDate.of(2026, 5, 3)));
+        assertEquals(false, HistoryRange.THREE_Y.enabled());
     }
 
     @Test
@@ -29,21 +31,21 @@ class MarketDataServiceTest {
         MarketDataService service = new MarketDataService(client);
         LocalDate end = LocalDate.of(2026, 5, 3);
 
-        service.getHistory("STOCK", "AAPL", null, end, HistoryRange.FOUR_Y);
+        service.getHistory("STOCK", "AAPL", null, end, HistoryRange.ONE_Y);
         assertEquals("/api/history/AAPL", client.path);
         assertEquals("STOCK", client.params.get("asset_type"));
-        assertEquals("4Y", client.params.get("period"));
+        assertEquals("365D", client.params.get("period"));
 
-        service.getHistory("FX", "EUR", "USD", end, HistoryRange.FOUR_Y);
+        service.getHistory("FX", "EUR", "USD", end, HistoryRange.ONE_Y);
         assertEquals("/api/history/EUR", client.path);
         assertEquals("FX", client.params.get("asset_type"));
         assertEquals("USD", client.params.get("base"));
 
-        service.getHistory("CRYPTO", "BTC", null, end, HistoryRange.FOUR_Y);
+        service.getHistory("CRYPTO", "BTC", null, end, HistoryRange.ONE_Y);
         assertEquals("/api/history/BTC", client.path);
         assertEquals("CRYPTO", client.params.get("asset_type"));
 
-        service.getHistory("MACRO", "SELIC_DAILY", null, end, HistoryRange.FOUR_Y);
+        service.getHistory("MACRO", "SELIC_DAILY", null, end, HistoryRange.ONE_Y);
         assertEquals("/api/history/SELIC_DAILY", client.path);
         assertEquals("MACRO", client.params.get("asset_type"));
     }

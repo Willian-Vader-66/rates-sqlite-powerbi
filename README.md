@@ -38,6 +38,33 @@ Market-data origin is explicit:
 - `mixed`: demo and live records are both present.
 - `unknown`: origin cannot be trusted yet.
 
+## Recommended Local Operation
+
+Start the local product with one PowerShell command:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run_finance_monitor.ps1
+```
+
+This opens the JavaFX Finance Monitor with a `Control Center` tab. After startup, use the JavaFX UI to enter the Twelve Data key for the current session, validate providers, run the LIVE 365D pipeline, inspect reports/logs, start or stop the backend, audit databases, and manually promote a candidate database.
+
+Useful startup options:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run_finance_monitor.ps1 -CheckOnly
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run_finance_monitor.ps1 -StartBackend
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run_finance_monitor.ps1 -LiveMode
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run_finance_monitor.ps1 -DemoMode
+```
+
+`-CheckOnly` validates paths and tools without opening the UI, asking for secrets, starting the backend, building data, or touching SQLite.
+
+The Control Center keeps `TWELVE_DATA_API_KEY` only in JavaFX memory and passes it to child Python commands through environment variables. It does not save the key to `.env`, docs, reports, logs, or committed files. Promotion is never automatic: Step 8 requires a passed dry-run plus manual confirmation and creates a backup.
+
+If the app is launched from a PowerShell session that already has `TWELVE_DATA_API_KEY`, the Control Center recognizes that environment key without filling the password field or showing the value. The provider table and pipeline badges share provider-status parsing, so Twelve Data `external_test=pass` is shown as Provider Validation passed, not as a missing secret.
+
+Pipeline status badges distinguish operational blockers from data quality failures: Passed, Passed with Warnings, Failed, Blocked by Missing Secret, Blocked by Provider/TLS, Ready for Dry Run, and Ready for Promotion. A missing or implausible Twelve Data key blocks stock validation before any provider call. TLS/CA or provider connectivity failures are shown separately so the user can tell environment issues from candidate DB defects.
+
 Build and validate the live candidate database first:
 
 ```powershell
@@ -47,6 +74,8 @@ python -m fx_rates dashboard validate-samples --db-path .tmp/live-main-candidate
 python -m fx_rates dashboard audit-live --db-path .tmp/live-main-candidate.sqlite
 python -m fx_rates api smoke-live --db-path .tmp/live-main-candidate.sqlite --port 8001
 ```
+
+`validate-samples` separates internal DB checks from external provider confirmation. A clean run returns `READY`; provider rate limit or transient external validation gaps return `READY_WITH_WARNINGS` only when the internal candidate, audit-live, and API smoke-live gates are clean and no required key is missing. Data problems, missing keys, failed audit/smoke gates, non-live/mixed history, invalid `data_health`, or critical quote/history divergence return `NOT_READY` or `FAIL`.
 
 Check providers and audits:
 
@@ -63,7 +92,7 @@ python -m fx_rates dashboard promote-live --candidate-db .tmp/live-main-candidat
 python -m fx_rates dashboard promote-live --candidate-db .tmp/live-main-candidate.sqlite --to-db data/fx.sqlite --backup
 ```
 
-Demo data can still be created explicitly for tests and local UI development, but it is not the product mode. See `docs/LIVE_DATA_SCOPE.md`, `docs/LIVE_FIRST_PRODUCT_SCOPE.md`, `docs/LIVE_FULL_TEST_PLAN.md`, and `docs/LIVE_PROMOTION_GUIDE.md`.
+Demo data can still be created explicitly for tests and local UI development, but it is not the product mode. See `docs/VISUAL_CONTROL_CENTER.md`, `docs/LIVE_DATA_SCOPE.md`, `docs/LIVE_FIRST_PRODUCT_SCOPE.md`, `docs/LIVE_FULL_TEST_PLAN.md`, and `docs/LIVE_PROMOTION_GUIDE.md`.
 
 ## Architecture
 
@@ -75,10 +104,10 @@ CoinGecko API  -> crypto provider ----------+        |
 BCB SGS API    -> macro provider -----------+        |
 Test providers -> dev/test data ------------+        |
                                                      v
-                                           FastAPI local HTTP API
+                                          FastAPI local HTTP API
                                                      |
                                                      v
-                                      future Java front-end / dashboards
+                                      JavaFX Finance Monitor / dashboards
 ```
 
 The Java front-end must consume the Python HTTP API. It should not read SQLite directly. The API contract lives in `docs/API_CONTRACT.md`.
@@ -241,6 +270,8 @@ Invoke-RestMethod http://127.0.0.1:8000/api/dashboard/summary
 ```
 
 The default live-first scope is intentionally small and reliable: USD/BRL, USD/EUR, USD/GBP, USD/JPY, USD/CAD, USD/CHF; BTC, ETH, SOL, BNB, XRP; AAPL, MSFT, NVDA, AMZN, GOOGL, META, TSLA, JPM, KO, AMD; SELIC_DAILY, CDI_DAILY, and IPCA_MONTHLY. The versioned release scope lives in `data/reference/live_release_scope.csv`.
+
+`IPCA_MONTHLY` is a monthly macro series. It is not expected to have 365 points or to publish up to the current daily market date. The LIVE 365D gate validates it by monthly frequency, minimum monthly point count, valid values, no future dates, duplicate checks, and a freshness window of 75 days. A latest monthly value inside that window is OK even when its calendar range is shorter than daily FX/stock/crypto ranges.
 
 Refresh recent live data after promotion:
 

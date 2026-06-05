@@ -187,10 +187,36 @@ def key_status(value: str | None) -> dict[str, bool]:
     stripped = raw.strip()
     present = bool(stripped)
     normalized = re.sub(r"[\s\-]+", "_", stripped.lower())
+    command_markers = (
+        "$env:",
+        "python",
+        "powershell",
+        "pwsh",
+        "fx_rates",
+        "run_live_pipeline",
+        "run_finance_monitor",
+        "twelve_data_api_key=",
+        "twleve_data_api_key=",
+        "cd ",
+        " c:",
+        "c:\\",
+        ";",
+        "|",
+        "&",
+        '"',
+        "'",
+        "`",
+    )
     valid_format = present
     if not present:
         valid_format = False
     elif stripped != raw or any(ch.isspace() for ch in stripped):
+        valid_format = False
+    elif len(stripped) > 128:
+        valid_format = False
+    elif any(marker in stripped.lower() for marker in command_markers):
+        valid_format = False
+    elif re.fullmatch(r"[A-Za-z0-9._-]+", stripped) is None:
         valid_format = False
     elif normalized in INVALID_KEY_MARKERS:
         valid_format = False

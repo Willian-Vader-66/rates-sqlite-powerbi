@@ -29,7 +29,7 @@ function Validate-TwelveKey {
     param([string]$Value)
     $key = $Value.Trim()
     $lower = $key.ToLowerInvariant()
-    $badMarkers = @("cd c:", "python", "fx_rates", '$env:', "powershell", "setx ", " -m ", "dashboard ", "providers ", "read-host", "twleve_data_api_key", "twelve_data_api_key=")
+    $badMarkers = @("cd c:", "c:\", "python", "fx_rates", '$env:', "powershell", "setx ", " -m ", "dashboard ", "providers ", "read-host", "twleve_data_api_key", "twelve_data_api_key=")
     $badValues = @("none", "null", "sua_chave_aqui", "your_key", "your_api_key", "your_twelve_data_api_key", "change_me", "changeme", "todo", "test", "fake", "demo", "placeholder")
 
     if (-not $key) {
@@ -45,6 +45,12 @@ function Validate-TwelveKey {
     }
     if (($key -split "\s+").Count -gt 1) {
         throw "The pasted value contains spaces. Paste only the Twelve Data key."
+    }
+    if ($key.Length -gt 128) {
+        throw "TWELVE_DATA_API_KEY is too long. Paste only the Twelve Data key."
+    }
+    if ($key -notmatch "^[A-Za-z0-9._-]+$") {
+        throw "The pasted value contains characters that do not look like an API key. Paste only the Twelve Data key."
     }
     foreach ($bad in $badValues) {
         if ($lower -eq $bad -or $lower.Contains($bad)) {
@@ -161,8 +167,17 @@ function Invoke-Checked {
         $parsedStatus = $Matches[1].Trim()
     } elseif ($text -match "LIVE AUDIT STATUS:\s*([A-Z_ ]+)") {
         $parsedStatus = $Matches[1].Trim()
+    } elseif ($text -match "PROMOTE LIVE DRY-RUN STATUS:\s*([A-Z_ ]+)") {
+        $parsedStatus = $Matches[1].Trim()
     } elseif ($text -match "API LIVE SMOKE Status:\s*([A-Z_ ]+)") {
         $parsedStatus = $Matches[1].Trim()
+    } elseif ($text -match "(?m)^Status:\s*([A-Z_ ]+)$") {
+        $parsedStatus = $Matches[1].Trim()
+    }
+    if ($Label -eq "Running provider external tests" -and ($text -match "external_test=fail" -or $text -match "status=not_configured")) {
+        $script:StepStatuses[$Label] = "FAIL"
+        $script:Failures.Add("$Label reported provider external_test=fail or not_configured.") | Out-Null
+        throw "$Label reported provider external_test=fail or not_configured."
     }
     if ($parsedStatus -eq "WARN" -or $parsedStatus -eq "READY_WITH_WARNINGS") {
         $script:Warnings.Add("$Label reported $parsedStatus.") | Out-Null

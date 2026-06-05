@@ -1,7 +1,7 @@
 # API Live Smoke Report
 
-Generated: 2026-05-26T15:40:21.362330+00:00
-DB: `C:\Projetos_Local\rates-sqlite-powerbi-git\.tmp\live-main-candidate.sqlite`
+Generated: 2026-06-05T20:36:04.546900+00:00
+DB: `C:\Projetos_Local\rates-sqlite-powerbi-git\data\fx.sqlite`
 Base URL: `http://127.0.0.1:8001`
 Overall status: **OK**
 

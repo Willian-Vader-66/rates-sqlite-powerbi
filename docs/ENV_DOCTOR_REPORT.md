@@ -1,6 +1,6 @@
 # Environment Doctor Report
 
-Generated: 2026-05-26T01:13:35.939023+00:00
+Generated: 2026-05-29T15:51:16.650537+00:00
 
 ## Python
 

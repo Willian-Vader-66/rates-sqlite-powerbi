@@ -17,6 +17,18 @@ def test_env_doctor_detects_command_pasted_as_twelve_key(monkeypatch) -> None:
     assert "command" in status["note"]
 
 
+def test_env_doctor_rejects_path_or_long_text_as_twelve_key(monkeypatch) -> None:
+    monkeypatch.setenv("TWELVE_DATA_API_KEY", r"C:\Projetos_Local\rates-sqlite-powerbi-git")
+    path_status = _key_env_status("TWELVE_DATA_API_KEY")
+    assert path_status["present"] is True
+    assert path_status["key_valid_format"] is False
+
+    monkeypatch.setenv("TWELVE_DATA_API_KEY", "A" * 129)
+    long_status = _key_env_status("TWELVE_DATA_API_KEY")
+    assert long_status["present"] is True
+    assert long_status["key_valid_format"] is False
+
+
 def test_env_doctor_classifies_ssl_error_with_recommendation() -> None:
     classified = classify_external_error(requests.exceptions.SSLError("certificate verify failed: secret=abc"))
 

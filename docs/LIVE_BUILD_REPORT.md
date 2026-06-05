@@ -1,7 +1,7 @@
 # Live-First Build Report
 
-Generated: 2026-05-26T01:16:11.797330+00:00
-Final status: **CANDIDATE_READY**
+Generated: 2026-06-03T15:23:59.638526+00:00
+Final status: **NOT READY**
 
 ## Scope
 
@@ -35,9 +35,9 @@ Final status: **CANDIDATE_READY**
 - path: `C:\Projetos_Local\rates-sqlite-powerbi-git\.tmp\live-main-candidate.sqlite`
 - data_mode: `live`
 - instruments: `24`
-- historical rows: `6370`
-- date_min: `2025-05-01`
-- date_max: `2026-05-25`
+- historical rows: `6368`
+- date_min: `2025-06-01`
+- date_max: `2026-06-03`
 - providers: `bcb_sgs, coingecko, frankfurter, twelvedata`
 - sample_validation_required: `true`
 - sample_validation_status: `NOT_RUN`
@@ -45,8 +45,8 @@ Final status: **CANDIDATE_READY**
 
 ## Validation
 
-- status: `OK`
-- critical failures: none
+- status: `FAIL`
+- FAIL: MACRO IPCA_MONTHLY: history range shorter than expected (304d < 310d)
 - warnings: none
 
 ## Safety

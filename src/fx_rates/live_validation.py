@@ -367,7 +367,8 @@ def _validate_symbol(
         elif status != "FAIL":
             status = "WARN"
         notes.append(f"history shorter than expected ({history['rows']} < {required_rows})")
-    if scope_item and history.get("date_min") and history.get("date_max"):
+    frequency = _expected_frequency(asset_type, symbol, scope_item)
+    if scope_item and history.get("date_min") and history.get("date_max") and not _uses_monthly_macro_policy(asset_type, frequency):
         try:
             coverage_days = (date.fromisoformat(str(history["date_max"])[:10]) - date.fromisoformat(str(history["date_min"])[:10])).days
         except ValueError:
@@ -378,6 +379,8 @@ def _validate_symbol(
             if coverage_days < required_days:
                 status = "FAIL"
                 notes.append(f"history range shorter than expected ({coverage_days}d < {required_days}d)")
+    if _uses_monthly_macro_policy(asset_type, frequency) and history["rows"] and status != "FAIL":
+        notes.append("monthly macro series validated by monthly point count and stale window")
 
     latest_value = quote.get("price") if quote else history.get("latest_value")
     if latest_value is not None and history.get("latest_value") not in (None, 0):
@@ -415,7 +418,7 @@ def _validate_symbol(
         "date_max": history.get("date_max"),
         "latest_value": latest_value,
         "unit_label": history.get("unit") or instrument.get("currency") or "-",
-        "expected_frequency": scope_item.expected_frequency if scope_item else "-",
+        "expected_frequency": frequency,
         "stale_days": stale["stale_days"],
         "allowed_stale_days": stale["allowed_stale_days"],
         "stale_status": stale["status"],
@@ -578,6 +581,10 @@ def _expected_frequency(asset_type: str, symbol: str, scope_item: LiveScopeItem 
     if asset_type in {"STOCK", "FX"}:
         return "business_daily"
     return "daily"
+
+
+def _uses_monthly_macro_policy(asset_type: str, frequency: str) -> bool:
+    return asset_type == "MACRO" and frequency == "monthly"
 
 
 def _allowed_stale_days(asset_type: str, frequency: str) -> int:

@@ -19,8 +19,9 @@ from fx_rates.live_promotion import run_promote_live, run_restore_backup
 from fx_rates.live_refresh import run_refresh_live
 from fx_rates.live_samples import SampleValidationResult, format_sample_validation, validate_samples
 from fx_rates.live_scope import required_scope_items
-from fx_rates.live_validation import _stale_status, validate_live_database
-from fx_rates.models import InstrumentRow, MarketQuoteRow, StockPriceDailyRow
+from fx_rates.live_validation import LiveValidationResult, _stale_status, validate_live_database
+from fx_rates.crypto_providers import CoinGeckoProviderError
+from fx_rates.models import CryptoPriceDailyRow, InstrumentRow, MarketQuoteRow, StockPriceDailyRow
 
 
 def _settings(db_path: str, tmp_path: Path):
@@ -158,9 +159,48 @@ def test_audit_live_does_not_treat_ipca_monthly_as_daily(tmp_path: Path) -> None
     result = validate_live_database(db_path, expected_years=1, report_path=tmp_path / "ipca-audit.md")
     row = next(item for item in result.symbols if item["symbol"] == "IPCA_MONTHLY")
 
+    assert result.status in {"OK", "WARN"}
+    assert row["status"] == "OK"
+    assert row["rows"] >= 10
     assert row["stale_status"] == "OK"
     assert row["allowed_stale_days"] == 75
+    assert not any("IPCA_MONTHLY: history range shorter than expected" in item for item in result.critical_failures)
     assert not any("IPCA_MONTHLY: STALE_DATA" in item for item in result.warnings)
+
+
+def test_audit_live_warns_for_ipca_monthly_after_allowed_window(tmp_path: Path) -> None:
+    db_path, _settings_obj = _make_full_fake_live_db(tmp_path)
+    latest_date = (date.today() - timedelta(days=90)).isoformat()
+    with sqlite3.connect(db_path) as conn:
+        old_max = conn.execute("SELECT MAX(date) FROM macro_indicators_daily WHERE indicator_code='IPCA_MONTHLY'").fetchone()[0]
+        conn.execute("DELETE FROM macro_indicators_daily WHERE indicator_code='IPCA_MONTHLY' AND date=?", (latest_date,))
+        conn.execute("UPDATE macro_indicators_daily SET date=? WHERE indicator_code='IPCA_MONTHLY' AND date=?", (latest_date, old_max))
+        conn.execute("DELETE FROM macro_indicators_daily WHERE indicator_code='IPCA_MONTHLY' AND date > ?", (latest_date,))
+        conn.execute("UPDATE market_quotes_latest SET quote_time=?, source_updated_at=? WHERE asset_type='MACRO' AND symbol='IPCA_MONTHLY'", (latest_date, latest_date))
+        conn.commit()
+
+    result = validate_live_database(db_path, expected_years=1, report_path=tmp_path / "ipca-warn.md")
+    row = next(item for item in result.symbols if item["symbol"] == "IPCA_MONTHLY")
+
+    assert result.status == "WARN"
+    assert row["status"] == "WARN"
+    assert row["stale_status"] == "WARN"
+    assert not result.critical_failures
+    assert any("IPCA_MONTHLY: monthly macro series validated" in item for item in result.warnings)
+    assert not any("IPCA_MONTHLY: history range shorter than expected" in item for item in result.critical_failures)
+
+
+def test_audit_live_fails_when_ipca_monthly_missing(tmp_path: Path) -> None:
+    db_path, _settings_obj = _make_full_fake_live_db(tmp_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DELETE FROM macro_indicators_daily WHERE indicator_code='IPCA_MONTHLY'")
+        conn.execute("DELETE FROM market_quotes_latest WHERE asset_type='MACRO' AND symbol='IPCA_MONTHLY'")
+        conn.commit()
+
+    result = validate_live_database(db_path, expected_years=1, report_path=tmp_path / "ipca-missing.md")
+
+    assert result.status == "FAIL"
+    assert any("MACRO IPCA_MONTHLY: no live history" in item for item in result.critical_failures)
 
 
 def test_validate_live_fails_with_mock_provider_marked_live(tmp_path: Path) -> None:
@@ -221,8 +261,17 @@ def test_validate_samples_fake_live_passes_when_values_match(tmp_path: Path) -> 
 
     result = validate_samples(settings, db_path=db_path, samples_per_symbol=3, report_path=tmp_path / "samples.md")
 
-    assert result.status == "OK"
+    assert result.status == "READY"
     assert all(row["status"] == "OK" for row in result.samples)
+
+
+def test_validate_samples_internal_history_is_chronological(tmp_path: Path) -> None:
+    db_path, settings = _make_full_fake_live_db(tmp_path, "ordered-history.sqlite")
+
+    result = validate_samples(settings, db_path=db_path, samples_per_symbol=3, external_test=False, report_path=tmp_path / "samples-ordered.md")
+
+    assert result.status == "READY"
+    assert not any(row["reason_code"] == "HISTORY_NOT_ORDERED" for row in result.samples)
 
 
 def test_validate_samples_fake_live_fails_when_db_value_diverges(tmp_path: Path) -> None:
@@ -232,9 +281,9 @@ def test_validate_samples_fake_live_fails_when_db_value_diverges(tmp_path: Path)
         conn.execute("UPDATE stock_prices_daily SET close=close * 10 WHERE symbol='AAPL' AND date=?", (sample_date,))
         conn.commit()
 
-    result = validate_samples(settings, db_path=db_path, samples_per_symbol=3, report_path=tmp_path / "samples-fail.md")
+    result = validate_samples(settings, db_path=db_path, samples_per_symbol=3, external_test=True, report_path=tmp_path / "samples-fail.md")
 
-    assert result.status == "FAIL"
+    assert result.status == "NOT_READY"
     assert any(row["symbol"] == "AAPL" and row["status"] == "FAIL" for row in result.samples)
 
 
@@ -245,24 +294,108 @@ def test_validate_samples_fails_for_empty_live_db(tmp_path: Path) -> None:
 
     result = validate_samples(settings, db_path=db_path, samples_per_symbol=3, report_path=tmp_path / "samples-empty.md")
 
-    assert result.status == "FAIL"
+    assert result.status == "NOT_READY"
     assert result.samples[0]["symbol"] == "NO_INSTRUMENTS"
 
 
 def test_validate_samples_fails_early_when_twelve_key_missing(tmp_path: Path) -> None:
-    db_path = str(tmp_path / "missing-twelve.sqlite")
+    db_path, _settings_obj = _make_full_fake_live_db(tmp_path, "missing-twelve.sqlite")
+    _mark_stock_provider(db_path, "twelvedata")
     settings = _twelvedata_settings(db_path, tmp_path, api_key="")
-    initialize_schema(db_path)
-    upsert_instruments(db_path, [_instrument("AAPL", "twelvedata", data_mode="live")])
 
     result = validate_samples(settings, db_path=db_path, samples_per_symbol=5, external_test=True, report_path=tmp_path / "samples-not-ready.md")
     output = format_sample_validation(result)
 
-    assert result.status == "NOT READY"
-    assert result.samples == []
-    assert "LIVE SAMPLE VALIDATION STATUS: NOT READY" in output
+    assert result.status == "NOT_READY"
+    assert result.samples
+    assert not any(row["asset_type"] == "STOCK" and row["endpoint"] == "twelvedata time_series" for row in result.samples)
+    assert any(item.get("reason_code") == "PROVIDER_KEY_MISSING" for item in result.provider_checks)
+    assert "LIVE SAMPLE VALIDATION STATUS: NOT_READY" in output
     assert "Reason: TWELVE_DATA_API_KEY missing for stock sample validation." in output
     assert "FAIL: STOCK AAPL" not in output
+
+
+def test_validate_samples_crypto_historical_uses_range_not_simple_price(monkeypatch, tmp_path: Path) -> None:
+    db_path, settings = _make_full_fake_live_db(tmp_path, "crypto-range.sqlite")
+    recorder = _RecordingCryptoProvider(db_path)
+    settings = DEFAULTS.__class__(**{**settings.__dict__, "crypto_provider": "coingecko"})
+    monkeypatch.setattr("fx_rates.live_samples.build_crypto_provider", lambda *_args, **_kwargs: recorder)
+
+    result = validate_samples(settings, db_path=db_path, samples_per_symbol=5, external_test=True, report_path=tmp_path / "samples-crypto-range.md")
+
+    crypto_historical = [
+        row for row in result.samples
+        if row["asset_type"] == "CRYPTO" and row["reason_code"] == "HISTORICAL_SAMPLE_VALIDATED_FROM_RANGE"
+    ]
+    crypto_latest = [
+        row for row in result.samples
+        if row["asset_type"] == "CRYPTO" and row["reason_code"] == "CURRENT_PRICE_ENDPOINT_USED_ONLY_FOR_LATEST"
+    ]
+    assert crypto_historical
+    assert crypto_latest
+    assert all(row["endpoint"].endswith("market_chart/range") for row in crypto_historical)
+    assert all(row["endpoint"] == "coingecko simple/price" for row in crypto_latest)
+    assert len(recorder.quote_calls) == len({row["symbol"] for row in crypto_latest})
+
+
+def test_validate_samples_latest_quote_can_use_simple_price(monkeypatch, tmp_path: Path) -> None:
+    db_path, settings = _make_full_fake_live_db(tmp_path, "crypto-latest.sqlite")
+    recorder = _RecordingCryptoProvider(db_path)
+    settings = DEFAULTS.__class__(**{**settings.__dict__, "crypto_provider": "coingecko"})
+    monkeypatch.setattr("fx_rates.live_samples.build_crypto_provider", lambda *_args, **_kwargs: recorder)
+
+    result = validate_samples(settings, db_path=db_path, samples_per_symbol=2, external_test=True, report_path=tmp_path / "samples-crypto-latest.md")
+
+    assert recorder.quote_calls
+    assert any(row["endpoint"] == "coingecko simple/price" and row["reason_code"] == "CURRENT_PRICE_ENDPOINT_USED_ONLY_FOR_LATEST" for row in result.samples)
+
+
+def test_validate_samples_rate_limit_has_clear_reason_code(monkeypatch, tmp_path: Path) -> None:
+    db_path, settings = _make_full_fake_live_db(tmp_path, "crypto-rate-limit.sqlite")
+    settings = DEFAULTS.__class__(**{**settings.__dict__, "crypto_provider": "coingecko"})
+    monkeypatch.setattr("fx_rates.live_samples.build_crypto_provider", lambda *_args, **_kwargs: _RateLimitedCryptoProvider())
+
+    result = validate_samples(settings, db_path=db_path, samples_per_symbol=2, external_test=True, report_path=tmp_path / "samples-rate-limit.md")
+
+    assert result.status == "READY_WITH_WARNINGS"
+    assert result.release_gate == "PASS_WITH_WARNINGS"
+    assert result.promotion_allowed is True
+    assert any(row["reason_code"] == "EXTERNAL_RATE_LIMIT" for row in result.samples)
+    assert "EXTERNAL_RATE_LIMIT" in format_sample_validation(result)
+
+
+def test_validate_samples_detects_latest_quote_history_divergence(tmp_path: Path) -> None:
+    db_path = str(tmp_path / "sample-divergence.sqlite")
+    settings = DEFAULTS.__class__(**{**_settings(db_path, tmp_path).__dict__, "live_default_days": 2})
+    initialize_schema(db_path)
+    upsert_instruments(db_path, [_instrument("AAPL", "fake_live", data_mode="live")])
+    upsert_stock_prices_daily(
+        db_path,
+        [
+            _stock_row("AAPL", "fake_live", data_mode="live", date="2026-05-18", close=100.0),
+            _stock_row("AAPL", "fake_live", data_mode="live", date="2026-05-19", close=110.0),
+        ],
+    )
+    upsert_market_quotes_latest(db_path, [_quote("AAPL", 1000.0, "fake_live", data_mode="live", quote_time="2026-05-19")])
+
+    result = validate_samples(settings, db_path=db_path, samples_per_symbol=2, external_test=False, report_path=tmp_path / "samples-divergence.md")
+
+    assert result.status == "NOT_READY"
+    assert any(row["reason_code"] == "LATEST_QUOTE_DIVERGENCE_FAIL" for row in result.samples)
+
+
+def test_validate_samples_demo_data_fails_live_validation(tmp_path: Path) -> None:
+    db_path = str(tmp_path / "sample-demo.sqlite")
+    settings = DEFAULTS.__class__(**{**_settings(db_path, tmp_path).__dict__, "live_default_days": 2})
+    initialize_schema(db_path)
+    upsert_instruments(db_path, [_instrument("AAPL", "mock", data_mode="demo")])
+    upsert_stock_prices_daily(db_path, [_stock_row("AAPL", "mock", data_mode="demo", date="2026-05-19")])
+    upsert_market_quotes_latest(db_path, [_quote("AAPL", 10.5, "mock", data_mode="demo", quote_time="2026-05-19")])
+
+    result = validate_samples(settings, db_path=db_path, samples_per_symbol=2, external_test=False, report_path=tmp_path / "samples-demo.md")
+
+    assert result.status == "NOT_READY"
+    assert any(row["reason_code"] in {"DEMO_DATA_IN_LIVE_VALIDATION", "MISSING_LIVE_HISTORY"} for row in result.samples)
 
 
 def test_validate_samples_output_does_not_contain_api_key(tmp_path: Path) -> None:
@@ -380,6 +513,142 @@ def test_promote_live_dry_run_fails_early_without_twelve_key(tmp_path: Path) -> 
     assert code == 5
 
 
+def test_promote_live_dry_run_blocks_validate_live_warning(monkeypatch, tmp_path: Path) -> None:
+    source_db, settings = _make_full_fake_live_db(tmp_path, "source-validate-warn.sqlite")
+    target_db = tmp_path / "target.sqlite"
+    initialize_schema(str(target_db))
+
+    monkeypatch.setattr(
+        "fx_rates.live_promotion.validate_live_database",
+        lambda *_args, **_kwargs: LiveValidationResult(
+            status="WARN",
+            db_path=source_db,
+            summary={"data_health": {"status": "OK"}},
+            symbols=[],
+            critical_failures=[],
+            warnings=["Data health is WARN"],
+            dashboard_audit={},
+            market_audit={},
+        ),
+    )
+
+    code = run_promote_live(
+        settings,
+        from_db=source_db,
+        to_db=str(target_db),
+        dry_run=True,
+        skip_samples=True,
+        skip_api_smoke=True,
+        expected_years=1,
+    )
+
+    assert code == 3
+    assert get_system_status(str(target_db))["is_empty"] is True
+
+
+def test_promote_live_dry_run_accepts_allowed_ipca_monthly_warning(monkeypatch, tmp_path: Path, capsys) -> None:
+    source_db, settings = _make_full_fake_live_db(tmp_path, "source-ipca-warn.sqlite")
+    target_db = tmp_path / "target.sqlite"
+    initialize_schema(str(target_db))
+
+    monkeypatch.setattr(
+        "fx_rates.live_promotion.validate_live_database",
+        lambda *_args, **_kwargs: LiveValidationResult(
+            status="WARN",
+            db_path=source_db,
+            summary={"data_health": {"status": "OK"}},
+            symbols=[],
+            critical_failures=[],
+            warnings=[
+                "MACRO IPCA_MONTHLY: monthly macro series validated by monthly point count and stale window; latest history appears stale (90 days old; allowed 75)"
+            ],
+            dashboard_audit={},
+            market_audit={},
+        ),
+    )
+
+    code = run_promote_live(
+        settings,
+        from_db=source_db,
+        to_db=str(target_db),
+        dry_run=True,
+        skip_samples=True,
+        skip_api_smoke=True,
+        expected_years=1,
+    )
+
+    output = capsys.readouterr().out
+    assert code == 0
+    assert "PROMOTE LIVE DRY-RUN STATUS: READY_WITH_WARNINGS" in output
+    assert get_system_status(str(target_db))["is_empty"] is True
+
+
+def test_promote_live_dry_run_blocks_non_ok_data_health(monkeypatch, tmp_path: Path) -> None:
+    source_db, settings = _make_full_fake_live_db(tmp_path, "source-health-warn.sqlite")
+    target_db = tmp_path / "target.sqlite"
+    initialize_schema(str(target_db))
+
+    monkeypatch.setattr(
+        "fx_rates.live_promotion.validate_live_database",
+        lambda *_args, **_kwargs: LiveValidationResult(
+            status="OK",
+            db_path=source_db,
+            summary={"data_health": {"status": "WARN"}},
+            symbols=[],
+            critical_failures=[],
+            warnings=[],
+            dashboard_audit={},
+            market_audit={},
+        ),
+    )
+
+    code = run_promote_live(
+        settings,
+        from_db=source_db,
+        to_db=str(target_db),
+        dry_run=True,
+        skip_samples=True,
+        skip_api_smoke=True,
+        expected_years=1,
+    )
+
+    assert code == 3
+    assert get_system_status(str(target_db))["is_empty"] is True
+
+
+def test_promote_live_dry_run_blocks_missing_data_health(monkeypatch, tmp_path: Path) -> None:
+    source_db, settings = _make_full_fake_live_db(tmp_path, "source-health-missing.sqlite")
+    target_db = tmp_path / "target.sqlite"
+    initialize_schema(str(target_db))
+
+    monkeypatch.setattr(
+        "fx_rates.live_promotion.validate_live_database",
+        lambda *_args, **_kwargs: LiveValidationResult(
+            status="OK",
+            db_path=source_db,
+            summary={},
+            symbols=[],
+            critical_failures=[],
+            warnings=[],
+            dashboard_audit={},
+            market_audit={},
+        ),
+    )
+
+    code = run_promote_live(
+        settings,
+        from_db=source_db,
+        to_db=str(target_db),
+        dry_run=True,
+        skip_samples=True,
+        skip_api_smoke=True,
+        expected_years=1,
+    )
+
+    assert code == 3
+    assert get_system_status(str(target_db))["is_empty"] is True
+
+
 def test_promote_live_dry_run_calls_validate_samples_when_twelve_key_present(monkeypatch, tmp_path: Path) -> None:
     source_db, _settings_obj = _make_full_fake_live_db(tmp_path, "source-twelve-present.sqlite")
     _mark_stock_provider(source_db, "twelvedata")
@@ -391,7 +660,7 @@ def test_promote_live_dry_run_calls_validate_samples_when_twelve_key_present(mon
     def fake_validate_samples(*_args, **kwargs):
         called["db_path"] = kwargs["db_path"]
         return SampleValidationResult(
-            status="OK",
+            status="READY",
             db_path=kwargs["db_path"],
             generated_at="2026-05-26T00:00:00+00:00",
             requested_period_days=365,
@@ -414,6 +683,123 @@ def test_promote_live_dry_run_calls_validate_samples_when_twelve_key_present(mon
 
     assert code == 0
     assert called["db_path"] == str(Path(source_db).resolve())
+
+
+def test_promote_live_dry_run_blocks_non_transient_ready_warning(monkeypatch, tmp_path: Path) -> None:
+    source_db, _settings_obj = _make_full_fake_live_db(tmp_path, "source-warning-blocked.sqlite")
+    _mark_stock_provider(source_db, "twelvedata")
+    target_db = tmp_path / "target.sqlite"
+    initialize_schema(str(target_db))
+    settings = _twelvedata_settings(str(target_db), tmp_path, api_key="valid-looking-key-12345")
+
+    def fake_validate_samples(*_args, **kwargs):
+        return SampleValidationResult(
+            status="READY_WITH_WARNINGS",
+            db_path=kwargs["db_path"],
+            generated_at="2026-05-26T00:00:00+00:00",
+            requested_period_days=365,
+            history_mode="standard",
+            advanced_history_available=False,
+            samples=[],
+            provider_checks=[],
+            reason_codes=["LATEST_QUOTE_DIVERGENCE_WARN"],
+        )
+
+    monkeypatch.setattr("fx_rates.live_promotion.validate_samples", fake_validate_samples)
+
+    code = run_promote_live(
+        settings,
+        from_db=source_db,
+        to_db=str(target_db),
+        dry_run=True,
+        skip_api_smoke=True,
+        expected_years=1,
+    )
+
+    assert code == 5
+    assert get_system_status(str(target_db))["is_empty"] is True
+
+
+class _RecordingCryptoProvider:
+    name = "coingecko"
+
+    def __init__(self, db_path: str) -> None:
+        self.db_path = db_path
+        self.daily_calls: list[str] = []
+        self.quote_calls: list[str] = []
+
+    def fetch_daily(self, asset, start: str, end: str) -> list[CryptoPriceDailyRow]:
+        self.daily_calls.append(asset.symbol)
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT date, symbol, name, price_usd, market_cap, volume_24h, change_24h, provider, fetched_at, data_mode, source_updated_at
+                FROM crypto_prices_daily
+                WHERE symbol=? AND date BETWEEN ? AND ?
+                ORDER BY date
+                """,
+                (asset.symbol, start, end),
+            ).fetchall()
+        return [
+            CryptoPriceDailyRow(
+                date=row[0],
+                symbol=row[1],
+                name=row[2],
+                price_usd=row[3],
+                market_cap=row[4],
+                volume_24h=row[5],
+                change_24h=row[6],
+                provider="coingecko",
+                fetched_at=row[8],
+                data_mode=row[9],
+                source_updated_at=row[10],
+            )
+            for row in rows
+        ]
+
+    def fetch_quote(self, asset) -> MarketQuoteRow:
+        self.quote_calls.append(asset.symbol)
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT date, price_usd FROM crypto_prices_daily WHERE symbol=? ORDER BY date DESC LIMIT 1",
+                (asset.symbol,),
+            ).fetchone()
+        return MarketQuoteRow(
+            symbol=asset.symbol,
+            asset_type="CRYPTO",
+            exchange="CRYPTO",
+            price=float(row[1]),
+            bid=None,
+            ask=None,
+            open=None,
+            high=None,
+            low=None,
+            previous_close=None,
+            change=None,
+            percent_change=None,
+            volume=None,
+            quote_time=row[0],
+            provider="coingecko",
+            fetched_at=f"{row[0]}T00:00:00Z",
+            data_mode="live",
+            source_updated_at=row[0],
+        )
+
+    def status(self):
+        return {"name": self.name, "configured": True}
+
+
+class _RateLimitedCryptoProvider:
+    name = "coingecko"
+
+    def fetch_daily(self, *_args, **_kwargs):
+        raise CoinGeckoProviderError("coingecko HTTP 429 endpoint=coins/bitcoin/market_chart/range body=rate limit", status_code=429, retryable=True)
+
+    def fetch_quote(self, *_args, **_kwargs):
+        raise CoinGeckoProviderError("coingecko HTTP 429 endpoint=simple/price body=rate limit", status_code=429, retryable=True)
+
+    def status(self):
+        return {"name": self.name, "configured": True}
 
 
 def _stock_count(db_path: str, symbol: str) -> int:

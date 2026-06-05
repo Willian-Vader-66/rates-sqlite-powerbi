@@ -74,6 +74,7 @@ public class DashboardController {
     private final StatusBarController statusBarController = new StatusBarController();
     private final InstrumentTableController tableController = new InstrumentTableController();
     private final ChartController chartController = new ChartController();
+    private final ControlCenterController controlCenterController;
     private final ErrorBanner errorBanner = new ErrorBanner();
     private final LoadingOverlay loadingOverlay = new LoadingOverlay();
     private final AtomicBoolean refreshing = new AtomicBoolean(false);
@@ -120,6 +121,7 @@ public class DashboardController {
     public DashboardController(AppConfig config, MarketDataService marketDataService) {
         this.config = config;
         this.marketDataService = marketDataService;
+        this.controlCenterController = new ControlCenterController(config, marketDataService);
         this.tableController.setOnSelection(this::loadInstrumentDetails);
     }
 
@@ -140,6 +142,7 @@ public class DashboardController {
         if (pollingTimeline != null) {
             pollingTimeline.stop();
         }
+        controlCenterController.stop();
     }
 
     private VBox buildHeader() {
@@ -184,6 +187,7 @@ public class DashboardController {
         tabs.getTabs().add(tab("Macro", buildDynamicPage(macroPage)));
         tabs.getTabs().add(tab("Watchlist", splitPane));
         tabs.getTabs().add(tab("Settings", buildSettingsPanel()));
+        tabs.getTabs().add(tab("Control Center", controlCenterController.createView()));
         VBox.setVgrow(tabs, Priority.ALWAYS);
 
         VBox content = new VBox(14, errorBanner, tabs);

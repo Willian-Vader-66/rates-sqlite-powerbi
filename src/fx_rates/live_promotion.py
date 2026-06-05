@@ -9,8 +9,23 @@ from .api_smoke import smoke_live_api
 from .config import Settings
 from .db_sqlite import initialize_schema
 from .live_samples import REPORT_PATH as SAMPLE_REPORT_PATH
-from .live_samples import stock_sample_validation_readiness, validate_samples
+from .live_samples import (
+    REASON_EXTERNAL_PROVIDER_UNAVAILABLE,
+    REASON_EXTERNAL_RATE_LIMIT,
+    REASON_HISTORICAL_SAMPLE_NEAREST_DATE_WARN,
+    REASON_PROVIDER_TLS_ERROR,
+    stock_sample_validation_readiness,
+    validate_samples,
+)
 from .live_validation import validate_live_database
+
+
+PROMOTION_ALLOWED_WARNING_REASONS = {
+    REASON_EXTERNAL_RATE_LIMIT,
+    REASON_EXTERNAL_PROVIDER_UNAVAILABLE,
+    REASON_PROVIDER_TLS_ERROR,
+    REASON_HISTORICAL_SAMPLE_NEAREST_DATE_WARN,
+}
 
 
 def run_promote_live(
@@ -38,11 +53,28 @@ def run_promote_live(
         print(f"promote-live aborted: source DB not found: {source}")
         return 2
 
+    sample_gate_status = "READY"
     validation = validate_live_database(str(source), expected_years=expected_years, expected_days=expected_days, report_path=None)
     if validation.status == "FAIL":
-        print("promote-live aborted: source validate-live returned FAIL")
+        print(f"promote-live aborted: source validate-live returned {validation.status}")
         for item in validation.critical_failures[:20]:
             print(f"FAIL: {item}")
+        for item in validation.warnings[:20]:
+            print(f"WARN: {item}")
+        return 3
+    if validation.status == "WARN":
+        disallowed_warnings = [item for item in validation.warnings if not _is_allowed_live_validation_warning(item)]
+        if disallowed_warnings:
+            print(f"promote-live aborted: source validate-live returned {validation.status}")
+            for item in disallowed_warnings[:20]:
+                print(f"WARN: {item}")
+            return 3
+        sample_gate_status = "READY_WITH_WARNINGS"
+        print("promote-live warning: live audit returned WARN for an allowed monthly macro freshness condition.")
+    data_health = validation.summary.get("data_health") if isinstance(validation.summary, dict) else {}
+    data_health_status = data_health.get("status") if isinstance(data_health, dict) else None
+    if data_health_status != "OK":
+        print(f"promote-live aborted: data_health must be OK, got {data_health_status or 'UNKNOWN'}")
         return 3
     if skip_samples:
         sample_status = _sample_report_status(source)
@@ -59,20 +91,28 @@ def run_promote_live(
                 print("promote-live aborted: TWELVE_DATA_API_KEY missing for stock external sample validation.")
             print("Run promote-live inside the same session as run_live_pipeline.ps1 or set the key in the current session.")
             return 5
-        sample = validate_samples(settings, db_path=str(source), samples_per_symbol=samples_per_symbol, report_path=None)
-        if sample.status == "FAIL":
-            print("promote-live aborted: validate-samples returned FAIL")
+        sample = validate_samples(settings, db_path=str(source), samples_per_symbol=samples_per_symbol, external_test=True, report_path=None)
+        if sample.status in {"FAIL", "NOT_READY"}:
+            print(f"promote-live aborted: validate-samples returned {sample.status}")
             failures = [row for row in sample.samples if row.get("status") == "FAIL"]
             for row in failures[:20]:
                 print(f"FAIL: {row.get('asset_type')} {row.get('symbol')} {row.get('sample_date')} - {row.get('note')}")
-            return 5
-        if sample.status == "NOT READY":
-            print("promote-live aborted: validate-samples returned NOT READY")
             if sample.reason:
                 print(f"Reason: {sample.reason}")
             if sample.action:
                 print(f"Action: {sample.action}")
             return 5
+        if sample.status == "READY_WITH_WARNINGS":
+            disallowed = sorted(set(sample.reason_codes) - PROMOTION_ALLOWED_WARNING_REASONS - {"VALIDATION_OK", "HISTORICAL_SAMPLE_VALIDATED_FROM_RANGE", "HISTORICAL_SAMPLE_NOT_COMPARED_TO_CURRENT_PRICE", "CURRENT_PRICE_ENDPOINT_USED_ONLY_FOR_LATEST"})
+            if disallowed:
+                print("promote-live aborted: READY_WITH_WARNINGS contains non-transient warning reason codes.")
+                print("Reason codes: " + ", ".join(disallowed))
+                return 5
+            sample_gate_status = "READY_WITH_WARNINGS"
+            print("promote-live warning: sample validation returned READY_WITH_WARNINGS.")
+            if sample.reason:
+                print(f"Reason: {sample.reason}")
+            print("Manual promotion may proceed only after reviewing the partial external validation.")
 
     if not skip_api_smoke:
         smoke_settings = replace(settings, db_path=str(source), api_port=smoke_port, market_data_demo_mode=False)
@@ -87,6 +127,7 @@ def run_promote_live(
         print("API smoke-live skipped explicitly by user flag.")
 
     if dry_run:
+        print(f"PROMOTE LIVE DRY-RUN STATUS: {sample_gate_status}")
         print(f"promote-live dry-run OK: {source} can be promoted to {target}")
         return 0
 
@@ -116,11 +157,33 @@ def _sample_report_status(source_db: Path) -> str | None:
         return None
     if "Overall status: **FAIL**" in text or "LIVE SAMPLE VALIDATION STATUS: FAIL" in text:
         return "FAIL"
-    if "Overall status: **WARN**" in text:
-        return "WARN"
-    if "Overall status: **OK**" in text:
-        return "OK"
+    if "Overall status: **NOT_READY**" in text or "LIVE SAMPLE VALIDATION STATUS: NOT_READY" in text:
+        return "FAIL"
+    if "Overall status: **READY_WITH_WARNINGS**" in text:
+        return "READY_WITH_WARNINGS"
+    if "Overall status: **READY**" in text:
+        return "READY"
     return None
+
+
+def _is_allowed_live_validation_warning(message: str) -> bool:
+    normalized = str(message or "").lower()
+    if not normalized.startswith("macro ipca_monthly:"):
+        return False
+    allowed_monthly_note = (
+        "latest history appears stale" in normalized
+        or "monthly macro series validated by monthly point count and stale window" in normalized
+    )
+    disallowed_markers = (
+        "latest quote differs",
+        "non-live",
+        "mock/demo",
+        "unsupported",
+        "history shorter",
+        "no live history",
+        "missing latest quote",
+    )
+    return allowed_monthly_note and not any(marker in normalized for marker in disallowed_markers)
 
 
 def run_restore_backup(*, backup: str, to_db: str) -> int:

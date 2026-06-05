@@ -172,6 +172,11 @@ def _format_audit_live(result: LiveValidationResult) -> str:
         if row.get("asset_type") == "MACRO" and row.get("expected_frequency") == "monthly"
     ]
     for row in monthly_macro:
+        monthly_note = (
+            "  note: IPCA is a monthly macro series and may lag daily market data. Latest value is within allowed monthly freshness window."
+            if row.get("stale_status") == "OK"
+            else "  note: IPCA is a monthly macro series and is validated by monthly point count plus freshness window."
+        )
         lines.extend(
             [
                 f"MACRO {row.get('symbol')}:",
@@ -180,6 +185,7 @@ def _format_audit_live(result: LiveValidationResult) -> str:
                 f"  stale_days: {row.get('stale_days') if row.get('stale_days') is not None else '-'}",
                 f"  allowed_stale_days: {row.get('allowed_stale_days') if row.get('allowed_stale_days') is not None else '-'}",
                 f"  status: {row.get('stale_status') or row.get('status')}",
+                monthly_note,
             ]
         )
     return "\n".join(lines)

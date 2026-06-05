@@ -774,3 +774,89 @@
 .metric-card .label {
     -fx-text-fill: #e8f1fb;
 }
+
+.control-center-root {
+    -fx-padding: 4 2 18 2;
+}
+
+.control-subcard {
+    -fx-background-color: #0f172a;
+    -fx-border-color: #243246;
+    -fx-border-radius: 7;
+    -fx-background-radius: 7;
+    -fx-padding: 10;
+}
+
+.control-step-grid {
+    -fx-padding: 2;
+}
+
+.control-step-grid .label {
+    -fx-text-fill: #dbe7f3;
+}
+
+.provider-table {
+    -fx-pref-height: 190;
+}
+
+.command-log,
+.text-area {
+    -fx-control-inner-background: #0b1220;
+    -fx-text-fill: #e5edf7;
+    -fx-highlight-fill: #1d4ed8;
+    -fx-highlight-text-fill: #ffffff;
+}
+
+.step-status {
+    -fx-padding: 4 8 4 8;
+    -fx-background-radius: 5;
+    -fx-border-radius: 5;
+    -fx-font-size: 11px;
+    -fx-font-weight: 800;
+    -fx-text-fill: #f8fafc;
+}
+
+.step-pending {
+    -fx-background-color: rgba(148, 163, 184, 0.16);
+    -fx-border-color: rgba(148, 163, 184, 0.48);
+}
+
+.step-running {
+    -fx-background-color: rgba(96, 165, 250, 0.18);
+    -fx-border-color: rgba(96, 165, 250, 0.65);
+}
+
+.step-passed {
+    -fx-background-color: rgba(34, 197, 94, 0.18);
+    -fx-border-color: rgba(34, 197, 94, 0.65);
+}
+
+.step-warning {
+    -fx-background-color: rgba(245, 158, 11, 0.20);
+    -fx-border-color: rgba(245, 158, 11, 0.72);
+}
+
+.step-failed {
+    -fx-background-color: rgba(239, 68, 68, 0.20);
+    -fx-border-color: rgba(239, 68, 68, 0.72);
+}
+
+.step-blocked {
+    -fx-background-color: rgba(220, 38, 38, 0.14);
+    -fx-border-color: rgba(220, 38, 38, 0.68);
+}
+
+.step-provider-blocked {
+    -fx-background-color: rgba(234, 88, 12, 0.16);
+    -fx-border-color: rgba(234, 88, 12, 0.68);
+}
+
+.step-ready {
+    -fx-background-color: rgba(20, 184, 166, 0.18);
+    -fx-border-color: rgba(20, 184, 166, 0.68);
+}
+
+.step-skipped {
+    -fx-background-color: rgba(100, 116, 139, 0.18);
+    -fx-border-color: rgba(100, 116, 139, 0.58);
+}

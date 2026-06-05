@@ -12,6 +12,17 @@ def test_run_live_pipeline_checkonly_does_not_prompt_for_key() -> None:
     assert text.index("if ($CheckOnly)") < text.index("    Read-TwelveKeyIntoEnvironment")
 
 
+def test_finance_monitor_checkonly_does_not_open_ui_or_touch_data() -> None:
+    text = (ROOT / "run_finance_monitor.ps1").read_text(encoding="utf-8")
+
+    assert "[switch]$CheckOnly" in text
+    assert "Read-Host" not in text
+    assert text.index("if ($CheckOnly)") < text.index("Opening JavaFX Control Center")
+    assert "build-live-db" not in text
+    assert "prepare-demo" not in text
+    assert "promote-live" not in text
+
+
 def test_setup_live_env_help_does_not_prompt_for_key() -> None:
     text = (ROOT / "scripts" / "setup_live_env.ps1").read_text(encoding="utf-8")
 
